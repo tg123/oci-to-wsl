@@ -208,11 +208,11 @@ func loadProfile(profile *config.Profile, saveTar string) error {
 // ~/.docker/config.json so the pull flow can authenticate to a registry
 // without docker (or any credential helper) being installed.
 func dockerLoginCommand() *cli.Command {
-return &cli.Command{
-Name:      "dockerlogin",
-Usage:     "log in to a registry by writing ~/.docker/config.json (no docker CLI required)",
-ArgsUsage: "[server]",
-Description: `Generate or update a classic docker config.json entry containing
+	return &cli.Command{
+		Name:      "dockerlogin",
+		Usage:     "log in to a registry by writing ~/.docker/config.json (no docker CLI required)",
+		ArgsUsage: "[server]",
+		Description: `Generate or update a classic docker config.json entry containing
 base64-encoded "username:password" credentials, exactly as 'docker login'
 would, but without requiring the docker CLI binary to be installed.
 
@@ -226,109 +226,109 @@ Examples:
 
   # GHCR with an explicit token, no prompting
   oci-to-wsl dockerlogin ghcr.io --username alice --password-stdin < token.txt`,
-Flags: []cli.Flag{
-&cli.StringFlag{
-Name:    "username",
-Aliases: []string{"u"},
-Usage:   "registry username",
-},
-&cli.StringFlag{
-Name:    "password",
-Aliases: []string{"p"},
-Usage:   "registry password (prefer --password-stdin to avoid leaking via process listings)",
-},
-&cli.BoolFlag{
-Name:  "password-stdin",
-Usage: "read the password from stdin",
-},
-&cli.StringFlag{
-Name:  "config",
-Usage: "path to the docker config.json to write (defaults to $DOCKER_CONFIG/config.json or ~/.docker/config.json)",
-},
-},
-Action: dockerLoginAction,
-}
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:    "username",
+				Aliases: []string{"u"},
+				Usage:   "registry username",
+			},
+			&cli.StringFlag{
+				Name:    "password",
+				Aliases: []string{"p"},
+				Usage:   "registry password (prefer --password-stdin to avoid leaking via process listings)",
+			},
+			&cli.BoolFlag{
+				Name:  "password-stdin",
+				Usage: "read the password from stdin",
+			},
+			&cli.StringFlag{
+				Name:  "config",
+				Usage: "path to the docker config.json to write (defaults to $DOCKER_CONFIG/config.json or ~/.docker/config.json)",
+			},
+		},
+		Action: dockerLoginAction,
+	}
 }
 
 func dockerLoginAction(_ context.Context, cmd *cli.Command) error {
-server := ""
-if cmd.NArg() > 0 {
-server = cmd.Args().First()
-}
+	server := ""
+	if cmd.NArg() > 0 {
+		server = cmd.Args().First()
+	}
 
-username := cmd.String("username")
-password := cmd.String("password")
-passwordStdin := cmd.Bool("password-stdin")
+	username := cmd.String("username")
+	password := cmd.String("password")
+	passwordStdin := cmd.Bool("password-stdin")
 
-if passwordStdin && password != "" {
-return fmt.Errorf("--password and --password-stdin are mutually exclusive")
-}
+	if passwordStdin && password != "" {
+		return fmt.Errorf("--password and --password-stdin are mutually exclusive")
+	}
 
-in := bufio.NewReader(os.Stdin)
-if username == "" {
-u, err := promptLine(in, fmt.Sprintf("Username for %s: ", displayServer(server)))
-if err != nil {
-return fmt.Errorf("reading username: %w", err)
-}
-username = strings.TrimSpace(u)
-if username == "" {
-return fmt.Errorf("username is required")
-}
-}
+	in := bufio.NewReader(os.Stdin)
+	if username == "" {
+		u, err := promptLine(in, fmt.Sprintf("Username for %s: ", displayServer(server)))
+		if err != nil {
+			return fmt.Errorf("reading username: %w", err)
+		}
+		username = strings.TrimSpace(u)
+		if username == "" {
+			return fmt.Errorf("username is required")
+		}
+	}
 
-if passwordStdin {
-data, err := io.ReadAll(os.Stdin)
-if err != nil {
-return fmt.Errorf("reading password from stdin: %w", err)
-}
-// Trim a single trailing newline (the conventional `echo $TOKEN |`
-// shape adds one) but preserve any internal whitespace.
-password = strings.TrimRight(string(data), "\r\n")
-} else if password == "" {
-p, err := promptPassword(fmt.Sprintf("Password for %s: ", displayServer(server)))
-if err != nil {
-return fmt.Errorf("reading password: %w", err)
-}
-password = p
-}
+	if passwordStdin {
+		data, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return fmt.Errorf("reading password from stdin: %w", err)
+		}
+		// Trim a single trailing newline (the conventional `echo $TOKEN |`
+		// shape adds one) but preserve any internal whitespace.
+		password = strings.TrimRight(string(data), "\r\n")
+	} else if password == "" {
+		p, err := promptPassword(fmt.Sprintf("Password for %s: ", displayServer(server)))
+		if err != nil {
+			return fmt.Errorf("reading password: %w", err)
+		}
+		password = p
+	}
 
-if password == "" {
-return fmt.Errorf("password is required")
-}
+	if password == "" {
+		return fmt.Errorf("password is required")
+	}
 
-path, err := registry.DockerLogin(registry.DockerLoginOptions{
-ConfigPath: cmd.String("config"),
-Server:     server,
-Username:   username,
-Password:   password,
-})
-if err != nil {
-return err
-}
+	path, err := registry.DockerLogin(registry.DockerLoginOptions{
+		ConfigPath: cmd.String("config"),
+		Server:     server,
+		Username:   username,
+		Password:   password,
+	})
+	if err != nil {
+		return err
+	}
 
-fmt.Printf("Login credentials for %s written to %s\n", displayServer(server), path)
-return nil
+	fmt.Printf("Login credentials for %s written to %s\n", displayServer(server), path)
+	return nil
 }
 
 // displayServer returns the human-readable server name used in prompts and
 // log output. An empty server is shown as the docker hub canonical key, to
 // match what `docker login` displays.
 func displayServer(server string) string {
-if strings.TrimSpace(server) == "" {
-return registry.DefaultDockerHubServer
-}
-return server
+	if strings.TrimSpace(server) == "" {
+		return registry.DefaultDockerHubServer
+	}
+	return server
 }
 
 // promptLine writes prompt to stderr (so it does not pollute stdout) and
 // reads a single line from r.
 func promptLine(r *bufio.Reader, prompt string) (string, error) {
-fmt.Fprint(os.Stderr, prompt)
-line, err := r.ReadString('\n')
-if err != nil && (line == "" || err != io.EOF) {
-return "", err
-}
-return line, nil
+	fmt.Fprint(os.Stderr, prompt)
+	line, err := r.ReadString('\n')
+	if err != nil && (line == "" || err != io.EOF) {
+		return "", err
+	}
+	return line, nil
 }
 
 // promptPassword reads a password from the controlling terminal without
@@ -336,19 +336,19 @@ return line, nil
 // falls back to a plain line read so the command remains scriptable even
 // without --password-stdin.
 func promptPassword(prompt string) (string, error) {
-fmt.Fprint(os.Stderr, prompt)
-fd := int(os.Stdin.Fd())
-if term.IsTerminal(fd) {
-data, err := term.ReadPassword(fd)
-fmt.Fprintln(os.Stderr)
-if err != nil {
-return "", err
-}
-return string(data), nil
-}
-line, err := bufio.NewReader(os.Stdin).ReadString('\n')
-if err != nil && (line == "" || err != io.EOF) {
-return "", err
-}
-return strings.TrimRight(line, "\r\n"), nil
+	fmt.Fprint(os.Stderr, prompt)
+	fd := int(os.Stdin.Fd())
+	if term.IsTerminal(fd) {
+		data, err := term.ReadPassword(fd)
+		fmt.Fprintln(os.Stderr)
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	}
+	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil && (line == "" || err != io.EOF) {
+		return "", err
+	}
+	return strings.TrimRight(line, "\r\n"), nil
 }
