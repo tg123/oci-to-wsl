@@ -19,9 +19,12 @@ const envDisableLocal = "OCI_TO_WSL_NO_LOCAL"
 // loadFromLocal tries to resolve imageRef against supported local container
 // engines (currently: the Docker daemon).
 //
-// It returns (img, true, nil) when the image is found locally, (nil, false,
-// nil) when no local engine has it (or local lookup is disabled), and
-// (nil, false, err) on an unexpected error.
+// It returns (img, true, nil) when the image is found locally, and
+// (nil, false, nil) in every other case where the caller should fall back
+// to a registry pull — including when local lookup is disabled via
+// OCI_TO_WSL_NO_LOCAL and when the daemon is unreachable or simply does
+// not have the image. The only error returned is for a malformed imageRef,
+// which would also fail the registry path and is worth surfacing early.
 //
 // The caller should fall back to a remote registry pull when the second
 // return value is false.
