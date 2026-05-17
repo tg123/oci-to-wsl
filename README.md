@@ -38,7 +38,10 @@ oci-to-wsl.exe dockerlogin myregistry.example.com -u alice -p s3cret --config C:
 ```
 
 Only the classic base64-encoded `username:password` format is written;
-credential helpers / stores are not invoked.
+credential helpers / stores are not invoked. The on-disk format is produced
+by docker's own `github.com/docker/cli/cli/config` package, so the resulting
+file is byte-for-byte identical to what `docker login` writes for the same
+inputs (verified by a unit test).
 
 ## YAML profile
 
