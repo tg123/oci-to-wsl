@@ -36,6 +36,9 @@ func Import(opts ImportOptions) error {
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	out, err := cmd.CombinedOutput()
+	if len(out) > 0 {
+		fmt.Println(strings.TrimSpace(string(out)))
+	}
 	if err != nil {
 		return fmt.Errorf("wsl --import failed: %w\n%s", err, strings.TrimSpace(string(out)))
 	}

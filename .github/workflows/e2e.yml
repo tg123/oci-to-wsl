@@ -41,30 +41,40 @@ jobs:
       - name: Import alpine:latest into WSL
         shell: pwsh
         run: |
-          .\oci-to-wsl.exe --image alpine:latest --name e2e-alpine --dir .\wsl-e2e-alpine
+          $installDir = Join-Path $PWD 'wsl-e2e-alpine'
+          Write-Host "Install dir: $installDir"
+          .\oci-to-wsl.exe --image alpine:latest --name e2e-alpine --dir $installDir
           if ($LASTEXITCODE -ne 0) { throw "oci-to-wsl failed with exit code $LASTEXITCODE" }
+          Write-Host "--- install dir contents ---"
+          Get-ChildItem -Force $installDir | Format-Table -AutoSize
 
       - name: Verify the distribution was created
         shell: pwsh
         run: |
+          Write-Host "--- wsl --list --verbose ---"
+          wsl.exe --list --verbose
+          Write-Host "--- wsl --list --quiet ---"
           $list = wsl.exe --list --quiet
-          Write-Host "Installed distributions:"
           Write-Host $list
           if ($list -notmatch 'e2e-alpine') { throw "e2e-alpine distribution not found" }
+          # Shut down WSL so the freshly-imported distro starts cleanly on the
+          # next invocation; without this, WSL 2.7 has occasionally been
+          # observed to run subsequent commands against a stale/empty mount.
+          wsl.exe --shutdown
 
       - name: Run commands inside the imported distribution
         shell: pwsh
         run: |
-          $release = wsl.exe -d e2e-alpine -- cat /etc/alpine-release
+          $release = wsl.exe -d e2e-alpine --user root --exec /bin/busybox cat /etc/alpine-release
           if ($LASTEXITCODE -ne 0) { throw "failed to read /etc/alpine-release" }
           Write-Host "alpine-release: $release"
           if ([string]::IsNullOrWhiteSpace($release)) { throw "/etc/alpine-release was empty" }
 
-          $uname = wsl.exe -d e2e-alpine -- uname -a
+          $uname = wsl.exe -d e2e-alpine --user root --exec /bin/busybox uname -a
           if ($LASTEXITCODE -ne 0) { throw "uname failed" }
           Write-Host "uname: $uname"
 
-          $hello = wsl.exe -d e2e-alpine -- sh -c "echo hello-from-wsl"
+          $hello = wsl.exe -d e2e-alpine --user root --exec /bin/busybox sh -c "echo hello-from-wsl"
           if ($LASTEXITCODE -ne 0) { throw "sh -c failed" }
           if ($hello -notmatch 'hello-from-wsl') { throw "unexpected output: $hello" }
 
