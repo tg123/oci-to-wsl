@@ -25,6 +25,12 @@ oci-to-wsl.exe --profile ubuntu.yaml
 name: my-ubuntu
 image: ubuntu:22.04
 install_dir: C:\WSL\my-ubuntu   # optional – defaults to .\<name>
+copies:                          # optional – copied before init_cmds so init can use the files
+  - src: ./scripts/bootstrap.sh  # relative paths resolve to the profile's directory
+    dst: /usr/local/bin/bootstrap.sh
+    mode: "0755"                 # optional – octal, e.g. "0755" or "777"
+  - src: ./assets                # directories copy recursively
+    dst: /opt/assets
 init_cmds:                       # optional – run inside the new distro after import
   - apt-get update -y
   - apt-get install -y curl git

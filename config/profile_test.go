@@ -73,6 +73,58 @@ func TestLoadProfile_InvalidYAML(t *testing.T) {
 	}
 }
 
+func TestLoadProfile_CopiesResolveRelativeSrc(t *testing.T) {
+	dir := t.TempDir()
+	yaml := `
+name: copy-distro
+image: alpine:latest
+copies:
+  - src: ./scripts/bootstrap.sh
+    dst: /usr/local/bin/bootstrap.sh
+    mode: "0755"
+  - src: /absolute/path/file
+    dst: /etc/file
+  - src: assets
+    dst: /opt/assets
+    mode: "777"
+`
+	path := filepath.Join(dir, "profile.yaml")
+	if err := os.WriteFile(path, []byte(yaml), 0600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := config.LoadProfile(path)
+	if err != nil {
+		t.Fatalf("LoadProfile: %v", err)
+	}
+	if len(p.Copies) != 3 {
+		t.Fatalf("Copies length: got %d, want 3", len(p.Copies))
+	}
+
+	wantRel0 := filepath.Join(dir, "scripts", "bootstrap.sh")
+	if p.Copies[0].Src != wantRel0 {
+		t.Errorf("Copies[0].Src: got %q, want %q", p.Copies[0].Src, wantRel0)
+	}
+	if p.Copies[0].Dst != "/usr/local/bin/bootstrap.sh" {
+		t.Errorf("Copies[0].Dst: got %q", p.Copies[0].Dst)
+	}
+	if p.Copies[0].Mode != "0755" {
+		t.Errorf("Copies[0].Mode: got %q", p.Copies[0].Mode)
+	}
+
+	// Absolute paths must be left untouched.
+	if p.Copies[1].Src != "/absolute/path/file" {
+		t.Errorf("Copies[1].Src: got %q, want unchanged absolute path", p.Copies[1].Src)
+	}
+
+	wantRel2 := filepath.Join(dir, "assets")
+	if p.Copies[2].Src != wantRel2 {
+		t.Errorf("Copies[2].Src: got %q, want %q", p.Copies[2].Src, wantRel2)
+	}
+	if p.Copies[2].Mode != "777" {
+		t.Errorf("Copies[2].Mode: got %q", p.Copies[2].Mode)
+	}
+}
+
 // writeAndLoad writes yaml content to a temp file and calls LoadProfile.
 func writeAndLoad(t *testing.T, yamlContent string) *config.Profile {
 	t.Helper()

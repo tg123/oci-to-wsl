@@ -181,6 +181,17 @@ func loadProfile(profile *config.Profile, saveTar string) error {
 
 	fmt.Printf("WSL distribution %q created successfully.\n", profile.Name)
 
+	// Copy files/directories into the new distribution before running any
+	// init commands so init scripts can rely on the copied content.
+	for _, c := range profile.Copies {
+		if c.Src == "" || c.Dst == "" {
+			return fmt.Errorf("profile copies: both 'src' and 'dst' are required")
+		}
+		if err := wsl.Copy(profile.Name, c.Src, c.Dst, c.Mode); err != nil {
+			return fmt.Errorf("copy %q -> %q failed: %w", c.Src, c.Dst, err)
+		}
+	}
+
 	// Run any post-creation initialisation commands.
 	for _, c := range profile.InitCmds {
 		if err := wsl.RunCommand(profile.Name, c); err != nil {

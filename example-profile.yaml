@@ -14,6 +14,19 @@ image: ubuntu:22.04
 # Where to store the WSL virtual disk.  Defaults to .\<name> when omitted.
 install_dir: C:\WSL\my-ubuntu
 
+# Optional: files or folders to copy from the host into the new distribution
+# before init_cmds run, so init scripts can use the copied content. Relative
+# 'src' paths are resolved against the directory containing this profile.
+# 'mode' is optional and is applied with chmod after the copy (recursively for
+# directories).
+copies:
+  - src: ./scripts/bootstrap.sh
+    dst: /usr/local/bin/bootstrap.sh
+    mode: "0755"
+  - src: ./assets
+    dst: /opt/assets
+    mode: "0777"
+
 # Optional: shell commands to run inside the new WSL instance after import.
 init_cmds:
   - apt-get update -y
