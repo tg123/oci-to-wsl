@@ -9,9 +9,9 @@ permissions:
   contents: read
 
 jobs:
-  e2e-save-tar:
-    name: Pull alpine and export rootfs tar
-    runs-on: ubuntu-latest
+  e2e-wsl-import:
+    name: Pull alpine and import into WSL
+    runs-on: windows-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -25,26 +25,48 @@ jobs:
       - name: Build oci-to-wsl
         env:
           CGO_ENABLED: 0
-        run: go build -trimpath -o oci-to-wsl .
+        run: go build -trimpath -o oci-to-wsl.exe .
 
-      - name: Pull alpine:latest and save rootfs tar
+      - name: Enable WSL
+        shell: pwsh
         run: |
-          ./oci-to-wsl --image alpine:latest --save-tar alpine-rootfs.tar
+          # windows-latest runners ship with wsl.exe; make sure it is on PATH.
+          wsl.exe --status
+          wsl.exe --version
 
-      - name: Verify exported rootfs tar
+      - name: Import alpine:latest into WSL
+        shell: pwsh
         run: |
-          set -euo pipefail
-          test -s alpine-rootfs.tar
-          ls -lh alpine-rootfs.tar
-          # Sanity check: the tar should contain a typical Alpine rootfs layout.
-          tar -tf alpine-rootfs.tar | head -n 50
-          tar -tf alpine-rootfs.tar | grep -E '(^|/)bin/(busybox|sh)$' >/dev/null
-          tar -tf alpine-rootfs.tar | grep -E '(^|/)etc/alpine-release$' >/dev/null
+          .\oci-to-wsl.exe --image alpine:latest --name e2e-alpine --dir .\wsl-e2e-alpine
+          if ($LASTEXITCODE -ne 0) { throw "oci-to-wsl failed with exit code $LASTEXITCODE" }
 
-      - name: Upload rootfs tar
-        uses: actions/upload-artifact@v4
-        with:
-          name: alpine-rootfs
-          path: alpine-rootfs.tar
-          if-no-files-found: error
-          retention-days: 7
+      - name: Verify the distribution was created
+        shell: pwsh
+        run: |
+          $list = wsl.exe --list --quiet
+          Write-Host "Installed distributions:"
+          Write-Host $list
+          if ($list -notmatch 'e2e-alpine') { throw "e2e-alpine distribution not found" }
+
+      - name: Run commands inside the imported distribution
+        shell: pwsh
+        run: |
+          $release = wsl.exe -d e2e-alpine -- cat /etc/alpine-release
+          if ($LASTEXITCODE -ne 0) { throw "failed to read /etc/alpine-release" }
+          Write-Host "alpine-release: $release"
+          if ([string]::IsNullOrWhiteSpace($release)) { throw "/etc/alpine-release was empty" }
+
+          $uname = wsl.exe -d e2e-alpine -- uname -a
+          if ($LASTEXITCODE -ne 0) { throw "uname failed" }
+          Write-Host "uname: $uname"
+
+          $hello = wsl.exe -d e2e-alpine -- sh -c "echo hello-from-wsl"
+          if ($LASTEXITCODE -ne 0) { throw "sh -c failed" }
+          if ($hello -notmatch 'hello-from-wsl') { throw "unexpected output: $hello" }
+
+      - name: Tear down the test distribution
+        if: always()
+        shell: pwsh
+        run: |
+          wsl.exe --unregister e2e-alpine
+          if ($LASTEXITCODE -ne 0) { Write-Host "unregister failed (non-fatal)" }
