@@ -57,7 +57,10 @@ func PullToTar(imageRef string, w io.Writer, opts PullOptions) error {
 	// final tar size for the progress bar's total.
 	const uncompressedRatio = 3
 	compressed := compressedSize(img)
-	estimatedTotal := compressed * uncompressedRatio
+	estimatedTotal := compressed
+	if compressed > 0 {
+		estimatedTotal = compressed * uncompressedRatio
+	}
 
 	desc := "Exporting rootfs "
 	if estimatedTotal > 0 {
