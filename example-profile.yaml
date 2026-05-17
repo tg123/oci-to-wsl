@@ -14,14 +14,15 @@ image: ubuntu:22.04
 # Where to store the WSL virtual disk.  Defaults to .\<name> when omitted.
 install_dir: C:\WSL\my-ubuntu
 
-# Optional: files or folders to copy from the host into the new distribution
-# before init_cmds run, so init scripts can use the copied content. Relative
-# 'src' paths are resolved against the directory containing this profile.
-# Windows %VAR% (e.g. %USERPROFILE%, %APPDATA%), POSIX $VAR / ${VAR} and a
-# leading ~ are expanded in 'src'. Native Windows paths like C:\Users\me\file
-# are accepted.
-# 'mode' is optional and is applied with chmod after the copy (recursively for
-# directories).
+# Optional: files or folders to stage into the new distribution by appending
+# them to the rootfs tar before `wsl --import` runs, so they are present on
+# first boot and visible to init_cmds. Relative 'src' paths are resolved
+# against the directory containing this profile. Windows %VAR% (e.g.
+# %USERPROFILE%, %APPDATA%), POSIX $VAR / ${VAR} and a leading ~ are expanded
+# in 'src'. Native Windows paths like C:\Users\me\file are accepted. 'dst'
+# must be an absolute POSIX path (start with '/'). 'mode' is optional and is
+# baked into the tar header (no chmod step runs inside the distribution);
+# for a directory source it applies recursively to all regular files.
 copies:
   - src: ./scripts/bootstrap.sh
     dst: /usr/local/bin/bootstrap.sh

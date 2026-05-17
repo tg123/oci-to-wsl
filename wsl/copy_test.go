@@ -34,7 +34,7 @@ func readTar(t *testing.T, path string) map[string]tarEntry {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	tr := tar.NewReader(f)
 	out := map[string]tarEntry{}
 	for {

@@ -130,15 +130,12 @@ jobs:
           New-Item -ItemType Directory -Force -Path (Join-Path $work 'assets/nested') | Out-Null
 
           # A script the init_cmds will execute. The init step must observe
-          # the executable bit set by 'mode: "0755"'.
-          $script = @'
-          #!/bin/sh
-          set -e
-          echo "bootstrap-ran" > /tmp/bootstrap-marker
-          cat /opt/assets/hello.txt > /tmp/assets-hello
-          cat /opt/assets/nested/inner.txt > /tmp/assets-inner
-          '@
-          Set-Content -NoNewline -Path (Join-Path $work 'scripts/bootstrap.sh') -Value $script
+          # the executable bit set by 'mode: "0755"'. Write with LF line
+          # endings: Set-Content on Windows defaults to CRLF, which would
+          # turn the shebang into "#!/bin/sh\r" and produce busybox's
+          # cryptic "not found" error at exec time.
+          $script = "#!/bin/sh`nset -e`necho `"bootstrap-ran`" > /tmp/bootstrap-marker`ncat /opt/assets/hello.txt > /tmp/assets-hello`ncat /opt/assets/nested/inner.txt > /tmp/assets-inner`n"
+          [System.IO.File]::WriteAllText((Join-Path $work 'scripts/bootstrap.sh'), $script)
 
           Set-Content -NoNewline -Path (Join-Path $work 'assets/hello.txt') -Value 'hello-from-host'
           Set-Content -NoNewline -Path (Join-Path $work 'assets/nested/inner.txt') -Value 'nested-from-host'

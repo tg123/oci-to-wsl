@@ -14,15 +14,24 @@ import (
 // CopyEntry describes a single file or directory on the host to be staged
 // inside the imported WSL distribution.
 type CopyEntry struct {
-	// Src is the absolute host path of a file or directory.
+	// Src is a host path to a file, directory, or symlink. It may be
+	// absolute or relative; the caller is responsible for resolving any
+	// relative paths (e.g. against the profile file directory) before
+	// passing the entry to InjectCopies. Environment variables and a
+	// leading ~ are NOT expanded here.
 	Src string
 
-	// Dst is the absolute POSIX path inside the distribution.
+	// Dst is the POSIX path inside the distribution where Src will be
+	// placed. It must be absolute (start with "/"). For a directory Src,
+	// the directory itself is created at Dst and its contents are written
+	// underneath; for a file Src, Dst is the resulting file path.
 	Dst string
 
-	// Mode, when non-empty, is an octal string (e.g. "0755", "777") applied
-	// to the destination. For a directory source it is applied to every
-	// regular file written under Dst.
+	// Mode, when non-empty, is an octal string (e.g. "0755", "777") baked
+	// into the tar header for the destination so that wsl.exe --import
+	// materialises Src at that mode without any chmod step inside the
+	// distribution. For a directory source it is applied to the directory
+	// and every regular file written under Dst (i.e. effectively recursive).
 	Mode string
 }
 
@@ -44,7 +53,7 @@ func InjectCopies(tarPath string, entries []CopyEntry) error {
 	if err != nil {
 		return fmt.Errorf("open rootfs tar %q: %w", tarPath, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// Strip the trailing two 512-byte zero blocks written by tar.Writer.Close
 	// so the new entries are appended in-stream rather than after EOF.
@@ -76,10 +85,12 @@ func InjectCopies(tarPath string, entries []CopyEntry) error {
 	return nil
 }
 
-// injectOne appends a single CopyEntry (a file or a recursive directory)
-// to the tar writer, along with any missing parent directory entries.
+// injectOne appends a single CopyEntry (a file, directory, or symlink) to
+// the tar writer, along with any missing parent directory entries.
 func injectOne(tw *tar.Writer, e CopyEntry, addedDirs map[string]struct{}) error {
-	info, err := os.Stat(e.Src)
+	// Use Lstat so a top-level symlink is preserved as a symlink rather
+	// than silently dereferenced into its target's contents.
+	info, err := os.Lstat(e.Src)
 	if err != nil {
 		return fmt.Errorf("stat %q: %w", e.Src, err)
 	}
@@ -95,19 +106,38 @@ func injectOne(tw *tar.Writer, e CopyEntry, addedDirs map[string]struct{}) error
 		hasMode = true
 	}
 
-	dst := toTarPath(e.Dst)
-	if dst == "" {
-		return fmt.Errorf("invalid dst %q", e.Dst)
+	dst, err := toTarPath(e.Dst)
+	if err != nil {
+		return fmt.Errorf("invalid dst %q: %w", e.Dst, err)
 	}
 
 	if err := writeParentDirs(tw, dst, addedDirs); err != nil {
 		return err
 	}
 
-	if info.IsDir() {
+	switch {
+	case info.Mode()&os.ModeSymlink != 0:
+		target, lerr := os.Readlink(e.Src)
+		if lerr != nil {
+			return fmt.Errorf("readlink %q: %w", e.Src, lerr)
+		}
+		mode := int64(info.Mode().Perm())
+		if hasMode {
+			mode = modeOverride
+		}
+		return tw.WriteHeader(&tar.Header{
+			Name:     dst,
+			Mode:     mode,
+			Linkname: filepath.ToSlash(target),
+			Typeflag: tar.TypeSymlink,
+			ModTime:  info.ModTime(),
+			Format:   tar.FormatPAX,
+		})
+	case info.IsDir():
 		return writeDirTree(tw, e.Src, dst, hasMode, modeOverride, addedDirs)
+	default:
+		return writeRegularFile(tw, e.Src, dst, info, hasMode, modeOverride)
 	}
-	return writeRegularFile(tw, e.Src, dst, info, hasMode, modeOverride)
 }
 
 // writeParentDirs emits tar entries for every missing parent directory of
@@ -162,7 +192,7 @@ func writeRegularFile(tw *tar.Writer, src, tarName string, info os.FileInfo, has
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if _, err := io.Copy(tw, f); err != nil {
 		return err
 	}
@@ -290,12 +320,20 @@ func parseOctalMode(mode string) (uint32, error) {
 
 // toTarPath converts an absolute POSIX destination path to a clean
 // tar-relative name (no leading slash, forward slashes, no "." or "..").
-func toTarPath(dst string) string {
+// It rejects empty or relative destinations so that profile entries which
+// would otherwise place files at unexpected locations surface as errors.
+func toTarPath(dst string) (string, error) {
+	if dst == "" {
+		return "", fmt.Errorf("destination path is empty")
+	}
 	d := filepath.ToSlash(dst)
-	d = path.Clean("/" + d)
+	if !strings.HasPrefix(d, "/") {
+		return "", fmt.Errorf("destination path must be absolute (start with '/')")
+	}
+	d = path.Clean(d)
 	d = strings.TrimPrefix(d, "/")
 	if d == "" || d == "." || strings.HasPrefix(d, "..") {
-		return ""
+		return "", fmt.Errorf("destination path resolves outside the rootfs")
 	}
-	return d
+	return d, nil
 }

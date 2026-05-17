@@ -11,22 +11,30 @@ import (
 )
 
 // CopyEntry describes a single file or directory to copy from the host into
-// the new WSL distribution before init_cmds run.
+// the new WSL distribution. Entries are staged by appending them to the
+// rootfs tar before `wsl --import` runs, so the files are present on first
+// boot and available to init_cmds.
 type CopyEntry struct {
-	// Src is the path on the host. May be a file or a directory. Relative
-	// paths are resolved against the directory of the profile file when the
-	// entry was loaded via LoadProfile; otherwise against the current
-	// working directory.
+	// Src is the path on the host. May be a file, directory, or symlink.
+	// Windows-native paths (e.g. C:\Users\me\file), %VAR% / $VAR / ${VAR}
+	// environment variable references, and a leading ~ are expanded by
+	// LoadProfile. Relative paths are resolved against the directory of
+	// the profile file when the entry was loaded via LoadProfile;
+	// otherwise against the current working directory.
 	Src string `yaml:"src"`
 
-	// Dst is the destination path inside the WSL distribution. For a
-	// directory source, the directory contents are placed at Dst. For a
-	// file source, Dst is the resulting file path.
+	// Dst is the destination POSIX path inside the WSL distribution and
+	// must be absolute (start with "/"). For a directory source, the
+	// directory itself is created at Dst and its contents are placed
+	// underneath. For a file source, Dst is the resulting file path.
 	Dst string `yaml:"dst"`
 
-	// Mode is an optional file mode to apply to the destination after the
-	// copy, expressed as an octal string (e.g. "0755", "755", "777"). For a
-	// directory source, the mode is applied recursively.
+	// Mode is an optional file mode for the destination, expressed as an
+	// octal string (e.g. "0755", "755", "777"). It is baked directly into
+	// the tar header so wsl.exe --import materialises Src at that mode —
+	// no chmod step runs inside the distribution. For a directory source
+	// the mode is applied to the directory and every regular file written
+	// under Dst (i.e. effectively recursive).
 	Mode string `yaml:"mode"`
 }
 
@@ -42,9 +50,10 @@ type Profile struct {
 	// Defaults to ".\<name>" relative to the current working directory.
 	InstallDir string `yaml:"install_dir"`
 
-	// Copies is a list of file/directory copies performed inside the new
-	// WSL distribution after import but before InitCmds, so init commands
-	// can rely on the copied content.
+	// Copies is a list of file/directory entries staged into the new WSL
+	// distribution by appending them to the rootfs tar before
+	// `wsl --import` runs, so they exist on first boot — and therefore
+	// before InitCmds, which can rely on the copied content.
 	Copies []CopyEntry `yaml:"copies"`
 
 	// InitCmds is a list of shell commands to run inside the new WSL instance after it is created.
