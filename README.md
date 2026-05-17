@@ -8,17 +8,11 @@ Load an OCI container-registry image directly into a **Windows Subsystem for Lin
 2. Run it from PowerShell:
 
 ```powershell
-# From Docker Hub
+# From Docker Hub (or, if already present, the local Docker daemon)
 oci-to-wsl.exe --image ubuntu:22.04 --name my-ubuntu
 
 # From Azure Container Registry (browser login opens automatically)
 oci-to-wsl.exe --image myacr.azurecr.io/myimage:latest --name myimage
-
-# From a local Docker daemon (no registry round-trip)
-oci-to-wsl.exe --image docker-daemon:ubuntu:22.04 --name my-ubuntu
-
-# From a local containerd namespace (requires the 'ctr' CLI in PATH)
-oci-to-wsl.exe --image containerd://k8s.io/alpine:3.20 --name my-alpine
 
 # Using a YAML profile
 oci-to-wsl.exe --profile ubuntu.yaml
@@ -26,17 +20,18 @@ oci-to-wsl.exe --profile ubuntu.yaml
 
 ## Image sources
 
-By default `--image` references are pulled from a remote OCI registry. The
-following optional scheme prefixes load the image from a local container engine
-instead, which avoids the registry round-trip when the image is already cached
-on the host:
+`oci-to-wsl` first looks up the requested image in the local Docker daemon
+(discovered via `DOCKER_HOST` / the default socket). When the image is found
+locally it is exported from the daemon directly, avoiding a registry round-trip.
+Otherwise the image is pulled from its OCI registry as usual.
 
-| Prefix | Source | Notes |
-|---|---|---|
-| _(none)_ | remote registry | default; uses Docker keychain / ACR browser login |
-| `docker-daemon:<image>` | local Docker daemon | discovered via `DOCKER_HOST` / default socket |
-| `containerd:<image>` | local containerd (namespace `default`) | requires the `ctr` CLI in `PATH` |
-| `containerd://<namespace>/<image>` | local containerd in `<namespace>` | requires the `ctr` CLI in `PATH` |
+Set `OCI_TO_WSL_NO_LOCAL=1` (also accepts `true`/`yes`) to skip the local
+lookup and always go to the registry:
+
+```powershell
+$env:OCI_TO_WSL_NO_LOCAL = '1'
+oci-to-wsl.exe --image ubuntu:22.04 --name my-ubuntu
+```
 
 ## YAML profile
 

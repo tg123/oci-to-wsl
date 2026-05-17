@@ -113,15 +113,19 @@ jobs:
           CGO_ENABLED: 0
         run: go build -trimpath -o oci-to-wsl .
 
-      - name: Ensure docker is running and seed alpine:latest
+      - name: Ensure docker is running and seed an image only present locally
         run: |
           docker version
+          # Build an image with a tag that does not exist in any registry so
+          # the test fails if oci-to-wsl falls back to a registry pull instead
+          # of using the local docker daemon as expected.
           docker pull alpine:latest
-          docker image inspect alpine:latest >/dev/null
+          docker tag alpine:latest oci-to-wsl-e2e/local-only:notpublished
+          docker image inspect oci-to-wsl-e2e/local-only:notpublished >/dev/null
 
-      - name: Export rootfs tar from docker daemon
+      - name: Export rootfs tar from docker daemon (auto-detected)
         run: |
-          ./oci-to-wsl --image docker-daemon:alpine:latest --save-tar alpine-docker.tar
+          ./oci-to-wsl --image oci-to-wsl-e2e/local-only:notpublished --save-tar alpine-docker.tar
           ls -lh alpine-docker.tar
 
       - name: Verify exported rootfs tar looks like an alpine rootfs
@@ -140,59 +144,18 @@ jobs:
           test -s rootfs-docker/etc/alpine-release
           echo "alpine-release: $(cat rootfs-docker/etc/alpine-release)"
 
-  e2e-containerd:
-    name: Load alpine from local containerd
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version: 'stable'
-          cache: true
-
-      - name: Build oci-to-wsl
+      - name: Verify OCI_TO_WSL_NO_LOCAL bypasses the local daemon
         env:
-          CGO_ENABLED: 0
-        run: go build -trimpath -o oci-to-wsl .
-
-      - name: Install containerd and the ctr CLI
+          OCI_TO_WSL_NO_LOCAL: "1"
         run: |
-          sudo apt-get update
-          sudo apt-get install -y containerd
-          sudo systemctl enable --now containerd
-          # Give containerd a moment to come up and create its socket.
-          for i in 1 2 3 4 5; do
-            if sudo ctr version >/dev/null 2>&1; then break; fi
-            sleep 1
-          done
-          sudo ctr version
-
-      - name: Seed alpine:latest into containerd (namespace=default)
-        run: |
-          sudo ctr images pull docker.io/library/alpine:latest
-          sudo ctr images ls | grep alpine
-
-      - name: Export rootfs tar from containerd
-        run: |
-          # ctr requires root to reach /run/containerd/containerd.sock, so run
-          # the tool with sudo. Pass an absolute path to the freshly built
-          # binary since sudo's PATH may not include the workspace.
-          sudo "$PWD/oci-to-wsl" --image containerd:docker.io/library/alpine:latest --save-tar alpine-ctr.tar
-          sudo chown "$USER" alpine-ctr.tar
-          ls -lh alpine-ctr.tar
-
-      - name: Verify exported rootfs tar looks like an alpine rootfs
-        run: |
-          tar -tf alpine-ctr.tar | head -50
-          if ! tar -tf alpine-ctr.tar | grep -qE '(^|/)etc/alpine-release$'; then
-            echo "etc/alpine-release missing from rootfs tar"
+          # With the local lookup disabled, the registry path is forced. The
+          # local-only image does not exist on any registry, so the command
+          # must fail.
+          if ./oci-to-wsl --image oci-to-wsl-e2e/local-only:notpublished --save-tar should-not-exist.tar; then
+            echo "expected failure when OCI_TO_WSL_NO_LOCAL=1 forces a registry pull of a local-only image"
             exit 1
           fi
-          mkdir rootfs-ctr
-          tar -xf alpine-ctr.tar -C rootfs-ctr ./etc/alpine-release 2>/dev/null || \
-            tar -xf alpine-ctr.tar -C rootfs-ctr etc/alpine-release
-          test -s rootfs-ctr/etc/alpine-release
-          echo "alpine-release: $(cat rootfs-ctr/etc/alpine-release)"
+          # Sanity check: with the flag on, pulling a real registry image
+          # should still work.
+          ./oci-to-wsl --image alpine:latest --save-tar alpine-registry.tar
+          test -s alpine-registry.tar

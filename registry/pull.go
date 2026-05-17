@@ -35,27 +35,35 @@ type PullOptions struct {
 // PullToTar pulls the OCI image identified by imageRef and writes the flattened
 // rootfs tar to w.  The flattened tar is suitable for use with "wsl --import".
 //
-// imageRef may carry an optional source-scheme prefix to load the image from a
-// local container engine instead of a remote registry:
-//
-//	docker-daemon:<image>             load from the local Docker daemon
-//	containerd:<image>                load from local containerd (namespace "default")
-//	containerd://<namespace>/<image>  load from local containerd in <namespace>
-//
-// Without a prefix the reference is pulled from its OCI registry (the default).
+// If the image is already present in a supported local container engine (the
+// local Docker daemon) it is loaded from there instead of being pulled from
+// the remote registry. Set the OCI_TO_WSL_NO_LOCAL environment variable to a
+// truthy value ("1", "true", "yes") to disable the local-engine lookup and
+// always go to the registry.
 func PullToTar(imageRef string, w io.Writer, opts PullOptions) error {
-	parsed := ParseRef(imageRef)
-
 	platform, err := resolvePlatform(opts.Platform)
 	if err != nil {
 		return err
 	}
 
-	img, cleanup, err := loadImage(parsed, platform, opts)
+	img, found, err := loadFromLocal(imageRef)
 	if err != nil {
 		return err
 	}
-	defer cleanup()
+	if !found {
+		ref, err := name.ParseReference(imageRef)
+		if err != nil {
+			return fmt.Errorf("parsing image reference %q: %w", imageRef, err)
+		}
+
+		pullOpts := buildCraneOptions(ref, platform, opts)
+
+		fmt.Printf("Pulling image %s (%s/%s) ...\n", ref, platform.OS, platform.Architecture)
+		img, err = crane.Pull(imageRef, pullOpts...)
+		if err != nil {
+			return fmt.Errorf("pulling image %q: %w", imageRef, err)
+		}
+	}
 
 	// crane.Export writes uncompressed tar bytes to w. Image manifests only
 	// contain compressed layer sizes, so use a 3x heuristic to estimate the

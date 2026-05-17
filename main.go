@@ -20,25 +20,16 @@ func main() {
 		Description: `Pull an OCI image from any container registry and import it as a
 WSL distribution in one command.
 
-The --image flag accepts an optional source-scheme prefix that loads the image
-from a local container engine instead of a remote registry:
-
-  docker-daemon:<image>              load from the local Docker daemon
-  containerd:<image>                 load from local containerd (namespace "default")
-  containerd://<namespace>/<image>   load from local containerd in <namespace>
+If the image already exists in the local Docker daemon it is loaded from there
+instead of being pulled from the registry. Set OCI_TO_WSL_NO_LOCAL=1 to disable
+this and always pull from the registry.
 
 Examples:
-  # Import directly from Docker Hub
+  # Import directly from Docker Hub (uses the local docker daemon if present)
   oci-to-wsl --image ubuntu:22.04 --name my-ubuntu
 
   # Import from Azure Container Registry (browser login triggered automatically)
   oci-to-wsl --image myacr.azurecr.io/myimage:latest --name myimage
-
-  # Import an image that already exists in the local Docker daemon
-  oci-to-wsl --image docker-daemon:ubuntu:22.04 --name my-ubuntu
-
-  # Import an image from a local containerd namespace (requires the 'ctr' CLI)
-  oci-to-wsl --image containerd://k8s.io/alpine:3.20 --name my-alpine
 
   # Use a YAML profile
   oci-to-wsl --profile ubuntu.yaml`,
@@ -49,7 +40,7 @@ Examples:
 			},
 			&cli.StringFlag{
 				Name:  "image",
-				Usage: "OCI image reference (optionally prefixed with 'docker-daemon:' or 'containerd:[//namespace/]' to load locally)",
+				Usage: "OCI image reference, e.g. ubuntu:22.04 or myacr.azurecr.io/myimage:latest",
 			},
 			&cli.StringFlag{
 				Name:  "name",
