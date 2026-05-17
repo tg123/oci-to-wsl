@@ -4,13 +4,16 @@ package registry
 import (
 	"fmt"
 	"io"
+	"os"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/crane"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/schollz/progressbar/v3"
 )
 
 // PullOptions controls how an image is pulled.
@@ -49,11 +52,80 @@ func PullToTar(imageRef string, w io.Writer, opts PullOptions) error {
 		return fmt.Errorf("pulling image %q: %w", imageRef, err)
 	}
 
-	fmt.Println("Exporting rootfs tar ...")
-	if err := crane.Export(img, w); err != nil {
+	// crane.Export writes uncompressed tar bytes to w. Image manifests only
+	// contain compressed layer sizes, so use a 3x heuristic to estimate the
+	// final tar size for the progress bar's total.
+	const uncompressedRatio = 3
+	compressed := compressedSize(img)
+	estimatedTotal := compressed
+	if compressed > 0 {
+		estimatedTotal = compressed * uncompressedRatio
+	}
+
+	desc := "Exporting rootfs "
+	if estimatedTotal > 0 {
+		desc = fmt.Sprintf("Exporting rootfs (est %s)", humanBytes(estimatedTotal))
+	}
+
+	bar := progressbar.NewOptions64(estimatedTotal,
+		progressbar.OptionSetDescription(desc),
+		progressbar.OptionShowBytes(true),
+		progressbar.OptionSetWidth(30),
+		progressbar.OptionThrottle(100*time.Millisecond),
+		progressbar.OptionShowCount(),
+		progressbar.OptionSetPredictTime(estimatedTotal > 0),
+		progressbar.OptionFullWidth(),
+		progressbar.OptionSetRenderBlankState(true),
+		progressbar.OptionOnCompletion(func() { fmt.Fprintln(os.Stderr) }),
+	)
+	defer func() { _ = bar.Close() }()
+
+	if err := crane.Export(img, io.MultiWriter(w, &safeBarWriter{bar: bar})); err != nil {
 		return fmt.Errorf("exporting rootfs tar: %w", err)
 	}
 	return nil
+}
+
+// safeBarWriter forwards bytes to a progressbar but never errors, even if the
+// running count exceeds the bar's configured total (which can happen when the
+// estimated uncompressed size is too low).
+type safeBarWriter struct {
+	bar *progressbar.ProgressBar
+}
+
+func (w *safeBarWriter) Write(p []byte) (int, error) {
+	_ = w.bar.Add(len(p))
+	return len(p), nil
+}
+
+func humanBytes(n int64) string {
+	const unit = 1000
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for x := n / unit; x >= unit; x /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "kMGTPE"[exp])
+}
+
+// compressedSize returns the sum of compressed layer sizes from the image
+// manifest. Returns -1 (indeterminate) when the manifest is unavailable.
+func compressedSize(img v1.Image) int64 {
+	m, err := img.Manifest()
+	if err != nil || m == nil {
+		return -1
+	}
+	var total int64
+	for _, l := range m.Layers {
+		total += l.Size
+	}
+	if total <= 0 {
+		return -1
+	}
+	return total
 }
 
 // buildCraneOptions constructs the crane.Option slice, wiring in the right

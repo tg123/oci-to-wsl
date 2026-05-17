@@ -57,16 +57,23 @@ jobs:
           $list = wsl.exe --list --quiet
           Write-Host $list
           if ($list -notmatch 'e2e-alpine') { throw "e2e-alpine distribution not found" }
-          # Shut down WSL so the freshly-imported distro starts cleanly on the
-          # next invocation; without this, WSL 2.7 has occasionally been
-          # observed to run subsequent commands against a stale/empty mount.
-          wsl.exe --shutdown
+
+      - name: Start the imported distribution
+        shell: pwsh
+        run: |
+          # Explicitly boot the distro. `wsl -d <name> --exec /bin/true` causes
+          # WSL to start the VM and mount the rootfs; without this the first
+          # real command can race with the WSL bootstrap and see an empty
+          # rootfs (getpwnam(root) failed 2, /bin/sh: No such file or directory).
+          wsl.exe -d e2e-alpine --exec /bin/busybox true
+          if ($LASTEXITCODE -ne 0) { throw "failed to start e2e-alpine (exit=$LASTEXITCODE)" }
+          Write-Host "--- wsl --list --verbose (after start) ---"
+          wsl.exe --list --verbose
 
       - name: Run commands inside the imported distribution
         shell: pwsh
         run: |
-          Write-Host "--- list / inside the distro (busybox ls) ---"
-          wsl.exe -d e2e-alpine --system --exec /bin/busybox ls -la /mnt/wsl 2>&1 | Out-Host
+          Write-Host "--- ls -la / inside the distro ---"
           wsl.exe -d e2e-alpine --exec /bin/busybox ls -la / 2>&1 | Out-Host
           Write-Host "(exit=$LASTEXITCODE)"
 
