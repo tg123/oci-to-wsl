@@ -5,9 +5,11 @@ import (
 	"os"
 	"strconv"
 
+	"github.com/containerd/errdefs"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/daemon"
+	"github.com/moby/moby/client"
 )
 
 // envDisableLocal, when set to a value parseable as true by strconv.ParseBool
@@ -19,15 +21,15 @@ const envDisableLocal = "OCI_TO_WSL_NO_LOCAL"
 // loadFromLocal tries to resolve imageRef against supported local container
 // engines (currently: the Docker daemon).
 //
-// It returns (img, true, nil) when the image is found locally, and
-// (nil, false, nil) in every other case where the caller should fall back
-// to a registry pull — including when local lookup is disabled via
-// OCI_TO_WSL_NO_LOCAL and when the daemon is unreachable or simply does
-// not have the image. The only error returned is for a malformed imageRef,
-// which would also fail the registry path and is worth surfacing early.
+// It returns (img, true, nil) when the image is found locally and
+// (nil, false, nil) when the caller should silently fall back to a registry
+// pull — i.e. when local lookup is disabled via OCI_TO_WSL_NO_LOCAL, when
+// the daemon is unreachable (e.g. Docker is not installed/running), or when
+// the daemon simply doesn't have the image.
 //
-// The caller should fall back to a remote registry pull when the second
-// return value is false.
+// Any other unexpected error from the daemon (corrupt image, permission
+// denied, malformed reference, …) is returned as (nil, false, err) so the
+// caller can surface it rather than masking it with a registry-pull failure.
 func loadFromLocal(imageRef string) (v1.Image, bool, error) {
 	if isLocalDisabled() {
 		return nil, false, nil
@@ -38,11 +40,13 @@ func loadFromLocal(imageRef string) (v1.Image, bool, error) {
 	}
 	img, err := daemon.Image(ref)
 	if err != nil {
-		// The daemon package returns an error both when the daemon is
-		// unreachable and when the image simply isn't present. In either
-		// case we silently fall back to the registry; the registry pull
-		// path will surface a more useful error if that also fails.
-		return nil, false, nil
+		// "Image not present" and "daemon unreachable" are both expected
+		// reasons to fall through to the registry path; everything else
+		// is genuinely unexpected and should be surfaced.
+		if errdefs.IsNotFound(err) || client.IsErrConnectionFailed(err) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("loading %q from local docker daemon: %w", imageRef, err)
 	}
 	fmt.Printf("Found image %s in local docker daemon, using it instead of pulling from registry.\n", ref)
 	return img, true, nil
