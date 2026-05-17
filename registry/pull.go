@@ -37,12 +37,12 @@ type PullOptions struct {
 //
 // If the image is already present in a supported local container engine (the
 // local Docker daemon) it is loaded from there instead of being pulled from
-// the remote registry. Set the OCI_TO_WSL_NO_LOCAL environment variable to a
-// value parseable as true by strconv.ParseBool (e.g. "1", "t", "true",
-// "True", "TRUE") to disable the local-engine lookup and always go to the
-// registry. The local-engine lookup is also skipped when opts.Platform is
-// non-empty, since the local daemon only holds whatever platform was last
-// pulled for the tag and would silently produce a tar for the wrong arch.
+// the remote registry. Set OCI_TO_WSL_NO_LOCAL=1 to disable the local-engine
+// lookup and always go to the registry (the value is parsed with
+// strconv.ParseBool, so any of its accepted truthy spellings work). The
+// local-engine lookup is also skipped when opts.Platform is non-empty, since
+// the local daemon only holds whatever platform was last pulled for the tag
+// and would silently produce a tar for the wrong arch.
 func PullToTar(imageRef string, w io.Writer, opts PullOptions) error {
 	platform, err := resolvePlatform(opts.Platform)
 	if err != nil {
