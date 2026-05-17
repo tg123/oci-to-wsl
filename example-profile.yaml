@@ -17,15 +17,21 @@ install_dir: C:\WSL\my-ubuntu
 # Optional: files or folders to copy from the host into the new distribution
 # before init_cmds run, so init scripts can use the copied content. Relative
 # 'src' paths are resolved against the directory containing this profile.
+# Windows %VAR% (e.g. %USERPROFILE%, %APPDATA%), POSIX $VAR / ${VAR} and a
+# leading ~ are expanded in 'src'. Native Windows paths like C:\Users\me\file
+# are accepted.
 # 'mode' is optional and is applied with chmod after the copy (recursively for
 # directories).
 copies:
   - src: ./scripts/bootstrap.sh
     dst: /usr/local/bin/bootstrap.sh
     mode: "0755"
-  - src: ./assets
+  - src: C:\Users\me\assets
     dst: /opt/assets
     mode: "0777"
+  - src: '%USERPROFILE%\.ssh\id_rsa.pub'
+    dst: /root/.ssh/authorized_keys
+    mode: "0600"
 
 # Optional: shell commands to run inside the new WSL instance after import.
 init_cmds:

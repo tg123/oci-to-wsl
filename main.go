@@ -160,6 +160,23 @@ func loadProfile(profile *config.Profile, saveTar string) error {
 	}
 	_ = tarFile.Close()
 
+	// Inject any host files/directories directly into the rootfs tar so
+	// they are present in the distribution as soon as wsl.exe --import
+	// finishes, before any init_cmds run. This avoids any dependency on a
+	// tar binary inside the container.
+	if len(profile.Copies) > 0 {
+		injects := make([]wsl.CopyEntry, 0, len(profile.Copies))
+		for _, c := range profile.Copies {
+			if c.Src == "" || c.Dst == "" {
+				return fmt.Errorf("profile copies: both 'src' and 'dst' are required")
+			}
+			injects = append(injects, wsl.CopyEntry{Src: c.Src, Dst: c.Dst, Mode: c.Mode})
+		}
+		if err := wsl.InjectCopies(tarPath, injects); err != nil {
+			return fmt.Errorf("staging copies into rootfs tar: %w", err)
+		}
+	}
+
 	if saveTar != "" {
 		fi, _ := os.Stat(tarPath)
 		fmt.Printf("Wrote rootfs tar to %s", tarPath)
@@ -180,17 +197,6 @@ func loadProfile(profile *config.Profile, saveTar string) error {
 	}
 
 	fmt.Printf("WSL distribution %q created successfully.\n", profile.Name)
-
-	// Copy files/directories into the new distribution before running any
-	// init commands so init scripts can rely on the copied content.
-	for _, c := range profile.Copies {
-		if c.Src == "" || c.Dst == "" {
-			return fmt.Errorf("profile copies: both 'src' and 'dst' are required")
-		}
-		if err := wsl.Copy(profile.Name, c.Src, c.Dst, c.Mode); err != nil {
-			return fmt.Errorf("copy %q -> %q failed: %w", c.Src, c.Dst, err)
-		}
-	}
 
 	// Run any post-creation initialisation commands.
 	for _, c := range profile.InitCmds {

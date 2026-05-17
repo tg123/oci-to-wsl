@@ -125,6 +125,67 @@ copies:
 	}
 }
 
+func TestLoadProfile_CopiesExpandWindowsEnv(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("OCI_TO_WSL_TEST_ROOT", dir)
+	t.Setenv("OCI_TO_WSL_TEST_NAME", "thing")
+
+	yaml := `
+name: env-distro
+image: alpine:latest
+copies:
+  - src: '%OCI_TO_WSL_TEST_ROOT%/sub/%OCI_TO_WSL_TEST_NAME%.txt'
+    dst: /tmp/win.txt
+  - src: '$OCI_TO_WSL_TEST_ROOT/posix/${OCI_TO_WSL_TEST_NAME}.txt'
+    dst: /tmp/posix.txt
+  - src: '%OCI_TO_WSL_TEST_UNSET_VAR%/literal'
+    dst: /tmp/unset.txt
+`
+	path := filepath.Join(dir, "profile.yaml")
+	if err := os.WriteFile(path, []byte(yaml), 0600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := config.LoadProfile(path)
+	if err != nil {
+		t.Fatalf("LoadProfile: %v", err)
+	}
+
+	want0 := filepath.Join(dir, "sub", "thing.txt")
+	if p.Copies[0].Src != want0 {
+		t.Errorf("Copies[0].Src: got %q, want %q", p.Copies[0].Src, want0)
+	}
+	want1 := filepath.Join(dir, "posix", "thing.txt")
+	if p.Copies[1].Src != want1 {
+		t.Errorf("Copies[1].Src: got %q, want %q", p.Copies[1].Src, want1)
+	}
+	// Unknown %VAR% must be preserved (not silently expanded to empty),
+	// then resolved relative to the profile dir.
+	want2 := filepath.Join(dir, "%OCI_TO_WSL_TEST_UNSET_VAR%", "literal")
+	if p.Copies[2].Src != want2 {
+		t.Errorf("Copies[2].Src: got %q, want %q", p.Copies[2].Src, want2)
+	}
+}
+
+func TestExpandHostPath_TildeAndUnknownVars(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		t.Skip("no user home dir available")
+	}
+
+	if got := config.ExpandHostPath("~"); got != home {
+		t.Errorf("~: got %q, want %q", got, home)
+	}
+	want := filepath.Join(home, "sub", "file.txt")
+	if got := config.ExpandHostPath("~/sub/file.txt"); got != want {
+		t.Errorf("~/sub/file.txt: got %q, want %q", got, want)
+	}
+
+	// Unknown $VAR and ${VAR} are preserved.
+	if got := config.ExpandHostPath("/a/$OCI_TO_WSL_DEFINITELY_UNSET/b"); got != "/a/${OCI_TO_WSL_DEFINITELY_UNSET}/b" {
+		t.Errorf("unknown $VAR not preserved: got %q", got)
+	}
+}
+
 // writeAndLoad writes yaml content to a temp file and calls LoadProfile.
 func writeAndLoad(t *testing.T, yamlContent string) *config.Profile {
 	t.Helper()

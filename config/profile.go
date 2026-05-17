@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -65,15 +67,70 @@ func LoadProfile(path string) (*Profile, error) {
 		return nil, fmt.Errorf("parsing profile %q: %w", path, err)
 	}
 
-	// Resolve relative copy sources against the profile file's directory so
+	// Resolve copy sources: expand Windows %VAR% / POSIX $VAR environment
+	// references and a leading ~ for the user's home folder, then resolve
+	// remaining relative paths against the profile file's directory so
 	// profiles remain portable regardless of the caller's CWD.
 	baseDir := filepath.Dir(path)
 	for i := range p.Copies {
 		src := p.Copies[i].Src
-		if src == "" || filepath.IsAbs(src) {
+		if src == "" {
 			continue
 		}
-		p.Copies[i].Src = filepath.Join(baseDir, src)
+		src = ExpandHostPath(src)
+		if !filepath.IsAbs(src) {
+			src = filepath.Join(baseDir, src)
+		}
+		p.Copies[i].Src = src
 	}
 	return &p, nil
+}
+
+// winEnvVarRE matches Windows-style %NAME% environment variable references.
+// NAME must be at least one non-% character to avoid matching a literal "%%".
+var winEnvVarRE = regexp.MustCompile(`%([^%]+)%`)
+
+// ExpandHostPath expands environment variable references and a leading ~ in a
+// host path. It supports:
+//   - Windows %NAME% references (e.g. %USERPROFILE%, %APPDATA%)
+//   - POSIX $NAME / ${NAME} references
+//   - A leading ~ or ~/ replaced with the current user's home directory
+//
+// Unknown variables are left as-is so that an unresolved %FOO% surfaces as a
+// "file not found" error rather than silently expanding to an empty string.
+func ExpandHostPath(p string) string {
+	if p == "" {
+		return p
+	}
+
+	// Expand %NAME% (Windows). Leave unknown vars untouched.
+	p = winEnvVarRE.ReplaceAllStringFunc(p, func(m string) string {
+		name := m[1 : len(m)-1]
+		if v, ok := os.LookupEnv(name); ok {
+			return v
+		}
+		return m
+	})
+
+	// Expand $NAME / ${NAME} (POSIX). os.Expand returns "" for missing vars;
+	// preserve the original token instead.
+	p = os.Expand(p, func(name string) string {
+		if v, ok := os.LookupEnv(name); ok {
+			return v
+		}
+		return "${" + name + "}"
+	})
+
+	// Expand a leading ~ or ~/ (or ~\ on Windows) to the user's home dir.
+	if p == "~" || strings.HasPrefix(p, "~/") || strings.HasPrefix(p, `~\`) {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			if p == "~" {
+				p = home
+			} else {
+				p = filepath.Join(home, p[2:])
+			}
+		}
+	}
+
+	return p
 }

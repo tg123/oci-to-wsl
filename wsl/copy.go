@@ -5,116 +5,152 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
 )
 
-// Copy copies a file or directory from the host into the given WSL
-// distribution. If mode is non-empty, it is parsed as an octal string (e.g.
-// "0755", "777") and applied to the destination after the copy (recursively
-// for directory sources).
+// CopyEntry describes a single file or directory on the host to be staged
+// inside the imported WSL distribution.
+type CopyEntry struct {
+	// Src is the absolute host path of a file or directory.
+	Src string
+
+	// Dst is the absolute POSIX path inside the distribution.
+	Dst string
+
+	// Mode, when non-empty, is an octal string (e.g. "0755", "777") applied
+	// to the destination. For a directory source it is applied to every
+	// regular file written under Dst.
+	Mode string
+}
+
+// InjectCopies appends entries to an existing rootfs tar archive so that
+// when WSL imports the tar the files are already present in the
+// distribution. This avoids any dependency on a tar binary inside the
+// container.
 //
-// The copy is performed by streaming a tar archive over stdin to a
-// "tar -xf -" invocation inside the distro, so it works on any rootfs that
-// ships a tar binary (including BusyBox tar on alpine).
-func Copy(distro, src, dst, mode string) error {
-	wslPath, err := findWSL()
+// The function expects tarPath to point at a well-formed tar archive
+// produced by Go's archive/tar (ending in two 512-byte zero blocks). The
+// trailing zero blocks are truncated, the new entries appended, and a
+// fresh trailer is written by Close.
+func InjectCopies(tarPath string, entries []CopyEntry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+
+	f, err := os.OpenFile(tarPath, os.O_RDWR, 0)
 	if err != nil {
-		return err
+		return fmt.Errorf("open rootfs tar %q: %w", tarPath, err)
 	}
-	if dst == "" {
-		return fmt.Errorf("copy: dst is required")
+	defer f.Close()
+
+	// Strip the trailing two 512-byte zero blocks written by tar.Writer.Close
+	// so the new entries are appended in-stream rather than after EOF.
+	if err := truncateTarTrailer(f); err != nil {
+		return fmt.Errorf("truncate tar trailer in %q: %w", tarPath, err)
+	}
+	if _, err := f.Seek(0, io.SeekEnd); err != nil {
+		return fmt.Errorf("seek end of %q: %w", tarPath, err)
 	}
 
-	info, err := os.Stat(src)
-	if err != nil {
-		return fmt.Errorf("copy: stat %q: %w", src, err)
-	}
+	// Deduplicate parent directory entries we add across calls to avoid
+	// emitting the same intermediate directory twice (some extractors warn).
+	addedDirs := make(map[string]struct{})
 
-	// Validate mode early so we don't tar+ship data only to fail at chmod.
-	if mode != "" {
-		if _, perr := parseMode(mode); perr != nil {
-			return fmt.Errorf("copy: invalid mode %q: %w", mode, perr)
+	tw := tar.NewWriter(f)
+	for _, e := range entries {
+		if e.Src == "" || e.Dst == "" {
+			_ = tw.Close()
+			return fmt.Errorf("inject copies: both 'src' and 'dst' are required")
+		}
+		if err := injectOne(tw, e, addedDirs); err != nil {
+			_ = tw.Close()
+			return err
 		}
 	}
-
-	// Always use forward-slash POSIX paths inside the distro.
-	dstPosix := toPosix(dst)
-
-	// Figure out where to extract the tar stream and what name(s) it will
-	// contain. For a file source we extract into the parent directory and
-	// rename to the destination basename; for a directory source we extract
-	// directly into the destination directory.
-	var extractDir string
-	if info.IsDir() {
-		extractDir = dstPosix
-	} else {
-		extractDir = path.Dir(dstPosix)
-		if extractDir == "" {
-			extractDir = "."
-		}
-	}
-
-	// Build the remote shell command: ensure target dir exists, untar from
-	// stdin, then optionally chmod.
-	shellCmd := fmt.Sprintf("set -e; mkdir -p %s; tar -xf - -C %s", shellQuote(extractDir), shellQuote(extractDir))
-	if mode != "" {
-		modeArg := normalizeMode(mode)
-		if info.IsDir() {
-			shellCmd += fmt.Sprintf("; chmod -R %s %s", modeArg, shellQuote(dstPosix))
-		} else {
-			shellCmd += fmt.Sprintf("; chmod %s %s", modeArg, shellQuote(dstPosix))
-		}
-	}
-
-	args := []string{"--distribution", distro, "--user", "root", "--", "sh", "-c", shellCmd}
-	fmt.Printf("[%s] copy %s -> %s\n", distro, src, dstPosix)
-	cmd := exec.Command(wslPath, args...) //nolint:gosec
-
-	pr, pw := io.Pipe()
-	cmd.Stdin = pr
-
-	// Stream the tar in a goroutine and forward any error to the pipe so
-	// the remote tar sees EOF and we capture write failures.
-	tarErrCh := make(chan error, 1)
-	go func() {
-		tw := tar.NewWriter(pw)
-		var terr error
-		if info.IsDir() {
-			terr = writeDirTar(tw, src)
-		} else {
-			terr = writeFileTar(tw, src, path.Base(dstPosix), info)
-		}
-		if cerr := tw.Close(); terr == nil {
-			terr = cerr
-		}
-		_ = pw.CloseWithError(terr)
-		tarErrCh <- terr
-	}()
-
-	out, runErr := cmd.CombinedOutput()
-	tarErr := <-tarErrCh
-
-	if tarErr != nil {
-		return fmt.Errorf("copy: building tar for %q: %w", src, tarErr)
-	}
-	if runErr != nil {
-		return fmt.Errorf("copy %q -> %q failed: %w\n%s", src, dstPosix, runErr, strings.TrimSpace(string(out)))
-	}
-	if len(out) > 0 {
-		fmt.Println(strings.TrimSpace(string(out)))
+	if err := tw.Close(); err != nil {
+		return fmt.Errorf("finalize rootfs tar %q: %w", tarPath, err)
 	}
 	return nil
 }
 
-// writeFileTar emits a single file entry under tarName.
-func writeFileTar(tw *tar.Writer, src, tarName string, info os.FileInfo) error {
+// injectOne appends a single CopyEntry (a file or a recursive directory)
+// to the tar writer, along with any missing parent directory entries.
+func injectOne(tw *tar.Writer, e CopyEntry, addedDirs map[string]struct{}) error {
+	info, err := os.Stat(e.Src)
+	if err != nil {
+		return fmt.Errorf("stat %q: %w", e.Src, err)
+	}
+
+	var modeOverride int64
+	var hasMode bool
+	if e.Mode != "" {
+		v, perr := parseOctalMode(e.Mode)
+		if perr != nil {
+			return fmt.Errorf("invalid mode %q for %q: %w", e.Mode, e.Src, perr)
+		}
+		modeOverride = int64(v)
+		hasMode = true
+	}
+
+	dst := toTarPath(e.Dst)
+	if dst == "" {
+		return fmt.Errorf("invalid dst %q", e.Dst)
+	}
+
+	if err := writeParentDirs(tw, dst, addedDirs); err != nil {
+		return err
+	}
+
+	if info.IsDir() {
+		return writeDirTree(tw, e.Src, dst, hasMode, modeOverride, addedDirs)
+	}
+	return writeRegularFile(tw, e.Src, dst, info, hasMode, modeOverride)
+}
+
+// writeParentDirs emits tar entries for every missing parent directory of
+// dst (relative tar name, no leading slash). Directories are created with
+// 0755 because we don't have a concrete source mode for them.
+func writeParentDirs(tw *tar.Writer, dst string, addedDirs map[string]struct{}) error {
+	parts := strings.Split(path.Dir(dst), "/")
+	var cur string
+	for _, p := range parts {
+		if p == "" || p == "." {
+			continue
+		}
+		if cur == "" {
+			cur = p
+		} else {
+			cur = cur + "/" + p
+		}
+		if _, ok := addedDirs[cur]; ok {
+			continue
+		}
+		addedDirs[cur] = struct{}{}
+		hdr := &tar.Header{
+			Name:     cur + "/",
+			Mode:     0755,
+			Typeflag: tar.TypeDir,
+			Format:   tar.FormatPAX,
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeRegularFile emits a single regular-file entry at tarName.
+func writeRegularFile(tw *tar.Writer, src, tarName string, info os.FileInfo, hasMode bool, modeOverride int64) error {
+	mode := int64(info.Mode().Perm())
+	if hasMode {
+		mode = modeOverride
+	}
 	hdr := &tar.Header{
 		Name:    tarName,
-		Mode:    int64(info.Mode().Perm()),
+		Mode:    mode,
 		Size:    info.Size(),
 		ModTime: info.ModTime(),
 		Format:  tar.FormatPAX,
@@ -133,10 +169,33 @@ func writeFileTar(tw *tar.Writer, src, tarName string, info os.FileInfo) error {
 	return nil
 }
 
-// writeDirTar walks src and emits entries with names relative to src so the
-// archive extracts directly into the destination directory.
-func writeDirTar(tw *tar.Writer, src string) error {
+// writeDirTree walks src and emits the directory plus all children under
+// dstBase (relative tar path).
+func writeDirTree(tw *tar.Writer, src, dstBase string, hasMode bool, modeOverride int64, addedDirs map[string]struct{}) error {
 	src = filepath.Clean(src)
+
+	// Emit the destination directory itself first.
+	rootInfo, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	dirMode := int64(rootInfo.Mode().Perm())
+	if hasMode {
+		dirMode = modeOverride
+	}
+	if _, ok := addedDirs[dstBase]; !ok {
+		addedDirs[dstBase] = struct{}{}
+		if err := tw.WriteHeader(&tar.Header{
+			Name:     dstBase + "/",
+			Mode:     dirMode,
+			Typeflag: tar.TypeDir,
+			ModTime:  rootInfo.ModTime(),
+			Format:   tar.FormatPAX,
+		}); err != nil {
+			return err
+		}
+	}
+
 	return filepath.Walk(src, func(p string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -146,55 +205,42 @@ func writeDirTar(tw *tar.Writer, src string) error {
 			return err
 		}
 		if rel == "." {
-			// Skip the root; extraction directory already exists.
 			return nil
 		}
-		tarName := filepath.ToSlash(rel)
+		tarName := dstBase + "/" + filepath.ToSlash(rel)
 
 		switch {
 		case info.Mode()&os.ModeSymlink != 0:
-			target, err := os.Readlink(p)
-			if err != nil {
-				return err
+			target, lerr := os.Readlink(p)
+			if lerr != nil {
+				return lerr
 			}
-			hdr := &tar.Header{
+			return tw.WriteHeader(&tar.Header{
 				Name:     tarName,
 				Mode:     int64(info.Mode().Perm()),
 				Linkname: filepath.ToSlash(target),
 				Typeflag: tar.TypeSymlink,
 				ModTime:  info.ModTime(),
 				Format:   tar.FormatPAX,
-			}
-			return tw.WriteHeader(hdr)
+			})
 		case info.IsDir():
-			hdr := &tar.Header{
+			subMode := int64(info.Mode().Perm())
+			if hasMode {
+				subMode = modeOverride
+			}
+			if _, ok := addedDirs[tarName]; ok {
+				return nil
+			}
+			addedDirs[tarName] = struct{}{}
+			return tw.WriteHeader(&tar.Header{
 				Name:     tarName + "/",
-				Mode:     int64(info.Mode().Perm()),
+				Mode:     subMode,
 				Typeflag: tar.TypeDir,
 				ModTime:  info.ModTime(),
 				Format:   tar.FormatPAX,
-			}
-			return tw.WriteHeader(hdr)
+			})
 		case info.Mode().IsRegular():
-			hdr := &tar.Header{
-				Name:    tarName,
-				Mode:    int64(info.Mode().Perm()),
-				Size:    info.Size(),
-				ModTime: info.ModTime(),
-				Format:  tar.FormatPAX,
-			}
-			if err := tw.WriteHeader(hdr); err != nil {
-				return err
-			}
-			f, err := os.Open(p) //nolint:gosec
-			if err != nil {
-				return err
-			}
-			if _, err := io.Copy(tw, f); err != nil {
-				_ = f.Close()
-				return err
-			}
-			return f.Close()
+			return writeRegularFile(tw, p, tarName, info, hasMode, modeOverride)
 		default:
 			// Skip sockets, devices and other unsupported entry types.
 			return nil
@@ -202,10 +248,35 @@ func writeDirTar(tw *tar.Writer, src string) error {
 	})
 }
 
-// parseMode accepts an octal string (optionally with a leading "0") and
-// returns the value. It is used both to validate the user input and to
-// produce a normalised form for chmod.
-func parseMode(mode string) (uint32, error) {
+// truncateTarTrailer removes the two trailing 512-byte zero blocks written
+// by tar.Writer.Close so that subsequent entries can be appended.
+func truncateTarTrailer(f *os.File) error {
+	fi, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	const trailer = 1024
+	if fi.Size() < trailer {
+		// Empty or malformed tar - nothing to trim.
+		return nil
+	}
+	buf := make([]byte, trailer)
+	if _, err := f.ReadAt(buf, fi.Size()-trailer); err != nil {
+		return err
+	}
+	for _, b := range buf {
+		if b != 0 {
+			// Not a standard trailer; leave the file alone rather than
+			// corrupt a tar archive we don't recognise.
+			return nil
+		}
+	}
+	return f.Truncate(fi.Size() - trailer)
+}
+
+// parseOctalMode parses a mode string in octal (with optional "0" or "0o"
+// prefix) and returns its numeric value.
+func parseOctalMode(mode string) (uint32, error) {
 	s := strings.TrimSpace(mode)
 	if strings.HasPrefix(s, "0o") || strings.HasPrefix(s, "0O") {
 		s = s[2:]
@@ -217,23 +288,14 @@ func parseMode(mode string) (uint32, error) {
 	return uint32(v), nil
 }
 
-// normalizeMode returns the mode in a form chmod accepts (plain octal
-// digits, no "0o" prefix).
-func normalizeMode(mode string) string {
-	v, err := parseMode(mode)
-	if err != nil {
-		return mode
+// toTarPath converts an absolute POSIX destination path to a clean
+// tar-relative name (no leading slash, forward slashes, no "." or "..").
+func toTarPath(dst string) string {
+	d := filepath.ToSlash(dst)
+	d = path.Clean("/" + d)
+	d = strings.TrimPrefix(d, "/")
+	if d == "" || d == "." || strings.HasPrefix(d, "..") {
+		return ""
 	}
-	return strconv.FormatUint(uint64(v), 8)
-}
-
-// toPosix converts a host path to forward-slash form for use inside WSL.
-func toPosix(p string) string {
-	return filepath.ToSlash(p)
-}
-
-// shellQuote wraps s in single quotes so it can be safely embedded in a
-// /bin/sh command line.
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+	return d
 }
