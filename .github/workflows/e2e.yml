@@ -12,6 +12,10 @@ jobs:
   e2e-wsl-import:
     name: Pull alpine and import into WSL
     runs-on: windows-latest
+    env:
+      # Force wsl.exe to emit UTF-8 instead of UTF-16 LE so PowerShell string
+      # matching on its output works as expected.
+      WSL_UTF8: "1"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
