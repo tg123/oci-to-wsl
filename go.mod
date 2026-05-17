@@ -9,6 +9,7 @@ require (
 	github.com/google/go-containerregistry v0.21.5
 	github.com/schollz/progressbar/v3 v3.19.0
 	github.com/urfave/cli/v3 v3.9.0
+	golang.org/x/term v0.42.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -34,7 +35,6 @@ require (
 	golang.org/x/net v0.53.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.43.0 // indirect
-	golang.org/x/term v0.42.0 // indirect
 	golang.org/x/text v0.36.0 // indirect
 	gotest.tools/v3 v3.5.2 // indirect
 )
