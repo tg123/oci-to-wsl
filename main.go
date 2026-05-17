@@ -1,12 +1,16 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/urfave/cli/v3"
+	"golang.org/x/term"
 
 	"github.com/tg123/oci-to-wsl/config"
 	"github.com/tg123/oci-to-wsl/registry"
@@ -35,7 +39,10 @@ Examples:
   oci-to-wsl --profile ubuntu.yaml
 
   # Save the rootfs tar for a non-host platform (save-tar mode only)
-  OCI_TO_WSL_PLATFORM=linux/arm64 oci-to-wsl --image ubuntu:22.04 --save-tar ubuntu-arm64.tar`,
+  OCI_TO_WSL_PLATFORM=linux/arm64 oci-to-wsl --image ubuntu:22.04 --save-tar ubuntu-arm64.tar
+
+  # Record registry credentials in ~/.docker/config.json without needing docker
+  oci-to-wsl dockerlogin ghcr.io --username alice`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:  "profile",
@@ -58,7 +65,8 @@ Examples:
 				Usage: "write the exported rootfs tar to this path and skip 'wsl --import' (useful on non-Windows hosts). Set OCI_TO_WSL_PLATFORM=os/arch (e.g. linux/arm64) to override the image platform; this is only honored in save-tar mode.",
 			},
 		},
-		Action: action,
+		Action:   action,
+		Commands: []*cli.Command{dockerLoginCommand()},
 	}
 
 	if err := cmd.Run(context.Background(), os.Args); err != nil {
@@ -199,4 +207,184 @@ func loadProfile(profile *config.Profile, saveTar string) error {
 		fmt.Printf("Initialisation of %q complete.\n", profile.Name)
 	}
 	return nil
+}
+
+// dockerLoginCommand defines the `dockerlogin` subcommand. It mirrors a
+// subset of `docker login` (server arg, --username, --password,
+// --password-stdin) and writes a classic basic-auth entry into
+// ~/.docker/config.json so the pull flow can authenticate to a registry
+// without docker (or any credential helper) being installed.
+func dockerLoginCommand() *cli.Command {
+	return &cli.Command{
+		Name:      "dockerlogin",
+		Usage:     "log in to a registry by writing ~/.docker/config.json (no docker CLI required)",
+		ArgsUsage: "[server]",
+		Description: `Generate or update a classic docker config.json entry containing
+base64-encoded "username:password" credentials, exactly as 'docker login'
+would, but without requiring the docker CLI binary to be installed.
+
+The resulting credentials are picked up automatically by the default pull
+flow (via go-containerregistry's keychain). If no server argument is given,
+Docker Hub is assumed.
+
+Examples:
+  # Interactive login to Docker Hub
+  oci-to-wsl dockerlogin
+
+  # GHCR with an explicit token, no prompting
+  oci-to-wsl dockerlogin ghcr.io --username alice --password-stdin < token.txt`,
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:    "username",
+				Aliases: []string{"u"},
+				Usage:   "registry username",
+			},
+			&cli.StringFlag{
+				Name:    "password",
+				Aliases: []string{"p"},
+				Usage:   "registry password (prefer --password-stdin to avoid leaking via process listings)",
+			},
+			&cli.BoolFlag{
+				Name:  "password-stdin",
+				Usage: "read the password from stdin",
+			},
+			&cli.StringFlag{
+				Name:  "config",
+				Usage: "path to the docker config.json to read/update (defaults to $DOCKER_CONFIG/config.json or ~/.docker/config.json)",
+			},
+			&cli.StringFlag{
+				Name:    "output",
+				Aliases: []string{"o"},
+				Usage:   "write the updated config.json here instead of overwriting --config; use '-' for stdout",
+			},
+		},
+		Action: dockerLoginAction,
+	}
+}
+
+func dockerLoginAction(_ context.Context, cmd *cli.Command) error {
+	server := ""
+	if cmd.NArg() > 0 {
+		server = cmd.Args().First()
+	}
+
+	username := cmd.String("username")
+	password := cmd.String("password")
+	passwordStdin := cmd.Bool("password-stdin")
+
+	if passwordStdin && password != "" {
+		return fmt.Errorf("--password and --password-stdin are mutually exclusive")
+	}
+
+	in := bufio.NewReader(os.Stdin)
+	if username == "" {
+		u, err := promptLine(in, fmt.Sprintf("Username for %s: ", displayServer(server)))
+		if err != nil {
+			return fmt.Errorf("reading username: %w", err)
+		}
+		username = strings.TrimSpace(u)
+		if username == "" {
+			return fmt.Errorf("username is required")
+		}
+	}
+
+	if passwordStdin {
+		data, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return fmt.Errorf("reading password from stdin: %w", err)
+		}
+		// Trim a single trailing newline (the conventional `echo $TOKEN |`
+		// shape adds one) but preserve any internal whitespace.
+		password = strings.TrimRight(string(data), "\r\n")
+	} else if password == "" {
+		p, err := promptPassword(fmt.Sprintf("Password for %s: ", displayServer(server)))
+		if err != nil {
+			return fmt.Errorf("reading password: %w", err)
+		}
+		password = p
+	}
+
+	if password == "" {
+		return fmt.Errorf("password is required")
+	}
+
+	opts := registry.DockerLoginOptions{
+		ConfigPath: cmd.String("config"),
+		Server:     server,
+		Username:   username,
+		Password:   password,
+	}
+
+	output := cmd.String("output")
+	if output == "-" {
+		if err := registry.DockerLoginToWriter(opts, os.Stdout); err != nil {
+			return err
+		}
+		return nil
+	}
+	if output != "" {
+		// --output overrides the on-disk write target while still reading
+		// any existing entries from --config / $DOCKER_CONFIG.
+		f, err := os.OpenFile(output, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+		if err != nil {
+			return fmt.Errorf("opening %q: %w", output, err)
+		}
+		defer func() { _ = f.Close() }()
+		if err := registry.DockerLoginToWriter(opts, f); err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "Login credentials for %s written to %s\n", displayServer(server), output)
+		return nil
+	}
+
+	path, err := registry.DockerLogin(opts)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Login credentials for %s written to %s\n", displayServer(server), path)
+	return nil
+}
+
+// displayServer returns the human-readable server name used in prompts and
+// log output. An empty server is shown as the docker hub canonical key, to
+// match what `docker login` displays.
+func displayServer(server string) string {
+	if strings.TrimSpace(server) == "" {
+		return registry.DefaultDockerHubServer
+	}
+	return server
+}
+
+// promptLine writes prompt to stderr (so it does not pollute stdout) and
+// reads a single line from r.
+func promptLine(r *bufio.Reader, prompt string) (string, error) {
+	fmt.Fprint(os.Stderr, prompt)
+	line, err := r.ReadString('\n')
+	if err != nil && (line == "" || err != io.EOF) {
+		return "", err
+	}
+	return line, nil
+}
+
+// promptPassword reads a password from the controlling terminal without
+// echoing it. When stdin is not a terminal (e.g. piped input in tests), it
+// falls back to a plain line read so the command remains scriptable even
+// without --password-stdin.
+func promptPassword(prompt string) (string, error) {
+	fmt.Fprint(os.Stderr, prompt)
+	fd := int(os.Stdin.Fd())
+	if term.IsTerminal(fd) {
+		data, err := term.ReadPassword(fd)
+		fmt.Fprintln(os.Stderr)
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	}
+	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil && (line == "" || err != io.EOF) {
+		return "", err
+	}
+	return strings.TrimRight(line, "\r\n"), nil
 }
