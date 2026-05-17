@@ -65,6 +65,11 @@ jobs:
       - name: Run commands inside the imported distribution
         shell: pwsh
         run: |
+          Write-Host "--- list / inside the distro (busybox ls) ---"
+          wsl.exe -d e2e-alpine --system --exec /bin/busybox ls -la /mnt/wsl 2>&1 | Out-Host
+          wsl.exe -d e2e-alpine --exec /bin/busybox ls -la / 2>&1 | Out-Host
+          Write-Host "(exit=$LASTEXITCODE)"
+
           $release = wsl.exe -d e2e-alpine --user root --exec /bin/busybox cat /etc/alpine-release
           if ($LASTEXITCODE -ne 0) { throw "failed to read /etc/alpine-release" }
           Write-Host "alpine-release: $release"
