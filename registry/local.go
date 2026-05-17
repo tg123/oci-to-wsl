@@ -3,15 +3,17 @@ package registry
 import (
 	"fmt"
 	"os"
+	"strconv"
 
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/daemon"
 )
 
-// envDisableLocal, when set to a truthy value ("1", "true", "yes"), disables
-// the automatic lookup of the image in supported local container engines and
-// forces oci-to-wsl to pull from the remote registry instead.
+// envDisableLocal, when set to a value parseable as true by strconv.ParseBool
+// (e.g. "1", "t", "true", "True", "TRUE"), disables the automatic lookup of
+// the image in supported local container engines and forces oci-to-wsl to
+// pull from the remote registry instead.
 const envDisableLocal = "OCI_TO_WSL_NO_LOCAL"
 
 // loadFromLocal tries to resolve imageRef against supported local container
@@ -44,12 +46,13 @@ func loadFromLocal(imageRef string) (v1.Image, bool, error) {
 }
 
 // isLocalDisabled reports whether the user has opted out of local-engine
-// lookups via the OCI_TO_WSL_NO_LOCAL environment variable.
+// lookups via the OCI_TO_WSL_NO_LOCAL environment variable. The value is
+// parsed with strconv.ParseBool, so any of 1/t/T/TRUE/true/True (and their
+// false-y counterparts) are accepted.
 func isLocalDisabled() bool {
-	switch os.Getenv(envDisableLocal) {
-	case "1", "true", "TRUE", "yes", "YES":
-		return true
-	default:
+	v, err := strconv.ParseBool(os.Getenv(envDisableLocal))
+	if err != nil {
 		return false
 	}
+	return v
 }

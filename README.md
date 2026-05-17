@@ -25,12 +25,28 @@ oci-to-wsl.exe --profile ubuntu.yaml
 locally it is exported from the daemon directly, avoiding a registry round-trip.
 Otherwise the image is pulled from its OCI registry as usual.
 
-Set `OCI_TO_WSL_NO_LOCAL=1` (also accepts `true`/`yes`) to skip the local
-lookup and always go to the registry:
+Set `OCI_TO_WSL_NO_LOCAL=1` (also accepts `true`/`True`/`TRUE`/`t`) to skip the
+local lookup and always go to the registry:
 
 ```powershell
 $env:OCI_TO_WSL_NO_LOCAL = '1'
 oci-to-wsl.exe --image ubuntu:22.04 --name my-ubuntu
+```
+
+## Cross-platform tars (save-tar mode)
+
+When importing into WSL the image platform is always the host's: importing an
+arm rootfs into an x86 WSL (or vice versa) does not work, so there is no CLI
+flag for it.
+
+In `--save-tar` mode you can override the platform via the
+`OCI_TO_WSL_PLATFORM` environment variable (format `os/arch`, e.g.
+`linux/arm64`, `windows/amd64`). The variable is ignored outside save-tar
+mode.
+
+```powershell
+$env:OCI_TO_WSL_PLATFORM = 'linux/arm64'
+oci-to-wsl.exe --image ubuntu:22.04 --save-tar ubuntu-arm64.tar
 ```
 
 ## YAML profile

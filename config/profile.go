@@ -21,11 +21,6 @@ type Profile struct {
 
 	// InitCmds is a list of shell commands to run inside the new WSL instance after it is created.
 	InitCmds []string `yaml:"init_cmds"`
-
-	// Platform selects a specific OS/arch from a multi-arch manifest list.
-	// Format is "os/arch" (e.g. "linux/amd64", "linux/arm64"). When empty
-	// the host's runtime arch is used (with OS forced to linux).
-	Platform string `yaml:"platform"`
 }
 
 // LoadProfile reads a YAML profile from the given file path.

@@ -11,13 +11,17 @@ func TestIsLocalDisabled(t *testing.T) {
 	}{
 		{"", false},
 		{"0", false},
+		{"f", false},
 		{"false", false},
+		{"False", false},
+		{"FALSE", false},
+		{"yes", false}, // strconv.ParseBool does not accept "yes"
 		{"no", false},
 		{"1", true},
+		{"t", true},
 		{"true", true},
+		{"True", true},
 		{"TRUE", true},
-		{"yes", true},
-		{"YES", true},
 	}
 	for _, tc := range cases {
 		t.Setenv(envDisableLocal, tc.val)
