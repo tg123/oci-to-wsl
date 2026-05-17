@@ -2,6 +2,7 @@ package registry
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -57,11 +58,42 @@ type DockerLoginOptions struct {
 //
 // It returns the path of the file that was written.
 func DockerLogin(opts DockerLoginOptions) (string, error) {
+	cf, path, err := buildDockerLoginConfig(opts)
+	if err != nil {
+		return "", err
+	}
+	if err := cf.Save(); err != nil {
+		return "", fmt.Errorf("saving docker config %q: %w", path, err)
+	}
+	return path, nil
+}
+
+// DockerLoginToWriter is the same as DockerLogin but writes the resulting
+// config.json to w instead of any file on disk. The existing config at
+// opts.ConfigPath (or the default docker config location) is still read so
+// that other auth entries and unknown top-level fields are preserved in the
+// output.
+func DockerLoginToWriter(opts DockerLoginOptions, w io.Writer) error {
+	cf, _, err := buildDockerLoginConfig(opts)
+	if err != nil {
+		return err
+	}
+	if err := cf.SaveToWriter(w); err != nil {
+		return fmt.Errorf("encoding docker config: %w", err)
+	}
+	return nil
+}
+
+// buildDockerLoginConfig validates opts, loads the existing config at the
+// resolved path (or starts an empty one), applies the credential update, and
+// returns the in-memory config plus the resolved source path. Both DockerLogin
+// and DockerLoginToWriter share this so they produce identical bytes.
+func buildDockerLoginConfig(opts DockerLoginOptions) (*configfile.ConfigFile, string, error) {
 	if opts.Username == "" {
-		return "", fmt.Errorf("username is required")
+		return nil, "", fmt.Errorf("username is required")
 	}
 	if opts.Password == "" {
-		return "", fmt.Errorf("password is required")
+		return nil, "", fmt.Errorf("password is required")
 	}
 
 	path := opts.ConfigPath
@@ -69,13 +101,13 @@ func DockerLogin(opts DockerLoginOptions) (string, error) {
 		var err error
 		path, err = DefaultDockerConfigPath()
 		if err != nil {
-			return "", err
+			return nil, "", err
 		}
 	}
 
 	cf, err := loadOrNewDockerConfig(path)
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
 
 	server := normalizeLoginServer(opts.Server)
@@ -84,11 +116,7 @@ func DockerLogin(opts DockerLoginOptions) (string, error) {
 		Password:      opts.Password,
 		ServerAddress: server,
 	}
-
-	if err := cf.Save(); err != nil {
-		return "", fmt.Errorf("saving docker config %q: %w", path, err)
-	}
-	return path, nil
+	return cf, path, nil
 }
 
 // loadOrNewDockerConfig reads the docker config.json at path through docker's

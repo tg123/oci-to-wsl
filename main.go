@@ -243,7 +243,12 @@ Examples:
 			},
 			&cli.StringFlag{
 				Name:  "config",
-				Usage: "path to the docker config.json to write (defaults to $DOCKER_CONFIG/config.json or ~/.docker/config.json)",
+				Usage: "path to the docker config.json to read/update (defaults to $DOCKER_CONFIG/config.json or ~/.docker/config.json)",
+			},
+			&cli.StringFlag{
+				Name:    "output",
+				Aliases: []string{"o"},
+				Usage:   "write the updated config.json here instead of overwriting --config; use '-' for stdout",
 			},
 		},
 		Action: dockerLoginAction,
@@ -296,12 +301,36 @@ func dockerLoginAction(_ context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("password is required")
 	}
 
-	path, err := registry.DockerLogin(registry.DockerLoginOptions{
+	opts := registry.DockerLoginOptions{
 		ConfigPath: cmd.String("config"),
 		Server:     server,
 		Username:   username,
 		Password:   password,
-	})
+	}
+
+	output := cmd.String("output")
+	if output == "-" {
+		if err := registry.DockerLoginToWriter(opts, os.Stdout); err != nil {
+			return err
+		}
+		return nil
+	}
+	if output != "" {
+		// --output overrides the on-disk write target while still reading
+		// any existing entries from --config / $DOCKER_CONFIG.
+		f, err := os.OpenFile(output, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+		if err != nil {
+			return fmt.Errorf("opening %q: %w", output, err)
+		}
+		defer func() { _ = f.Close() }()
+		if err := registry.DockerLoginToWriter(opts, f); err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "Login credentials for %s written to %s\n", displayServer(server), output)
+		return nil
+	}
+
+	path, err := registry.DockerLogin(opts)
 	if err != nil {
 		return err
 	}

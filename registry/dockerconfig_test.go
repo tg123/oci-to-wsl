@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"os"
@@ -262,5 +263,78 @@ func TestDockerLoginOverwrite(t *testing.T) {
 	}
 	if got := cf.AuthConfigs["ghcr.io"].Password; got != "second" {
 		t.Errorf("password not overwritten: got %q, want %q", got, "second")
+	}
+}
+
+// TestDockerLoginToWriterMatchesDockerLogin ensures the writer-based output
+// produces the same bytes as the file-based DockerLogin, so callers writing
+// to stdout or a custom path get an identical config.json.
+func TestDockerLoginToWriterMatchesDockerLogin(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	opts := DockerLoginOptions{
+		ConfigPath: path,
+		Server:     "ghcr.io",
+		Username:   "alice",
+		Password:   "secret",
+	}
+	if _, err := DockerLogin(opts); err != nil {
+		t.Fatalf("DockerLogin: %v", err)
+	}
+	fileBytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := DockerLoginToWriter(opts, &buf); err != nil {
+		t.Fatalf("DockerLoginToWriter: %v", err)
+	}
+	if !bytes.Equal(fileBytes, buf.Bytes()) {
+		t.Errorf("writer output differs from file output:\nfile:\n%s\nwriter:\n%s", fileBytes, buf.Bytes())
+	}
+}
+
+// TestDockerLoginToWriterPreservesExistingEntries asserts that writing to a
+// writer still reads from ConfigPath so unrelated auth entries survive.
+func TestDockerLoginToWriterPreservesExistingEntries(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if _, err := DockerLogin(DockerLoginOptions{
+		ConfigPath: path, Server: "quay.io", Username: "bob", Password: "pw",
+	}); err != nil {
+		t.Fatalf("seed login: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := DockerLoginToWriter(DockerLoginOptions{
+		ConfigPath: path, Server: "ghcr.io", Username: "alice", Password: "secret",
+	}, &buf); err != nil {
+		t.Fatalf("DockerLoginToWriter: %v", err)
+	}
+
+	var out struct {
+		Auths map[string]struct {
+			Auth string `json:"auth"`
+		} `json:"auths"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &out); err != nil {
+		t.Fatalf("json decode: %v", err)
+	}
+	if _, ok := out.Auths["quay.io"]; !ok {
+		t.Errorf("existing quay.io entry was not preserved: %v", out.Auths)
+	}
+	if _, ok := out.Auths["ghcr.io"]; !ok {
+		t.Errorf("new ghcr.io entry missing: %v", out.Auths)
+	}
+}
+
+func TestDockerLoginToWriterValidation(t *testing.T) {
+	var buf bytes.Buffer
+	if err := DockerLoginToWriter(DockerLoginOptions{Username: "", Password: "x"}, &buf); err == nil {
+		t.Errorf("expected error when username is empty")
+	}
+	if err := DockerLoginToWriter(DockerLoginOptions{Username: "x", Password: ""}, &buf); err == nil {
+		t.Errorf("expected error when password is empty")
 	}
 }

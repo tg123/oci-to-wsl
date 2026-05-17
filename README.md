@@ -35,6 +35,10 @@ oci-to-wsl.exe dockerlogin ghcr.io --username alice --password-stdin < token.txt
 
 # Custom config path
 oci-to-wsl.exe dockerlogin myregistry.example.com -u alice -p s3cret --config C:\creds\config.json
+
+# Write the resulting config.json to a different file (or '-' for stdout)
+oci-to-wsl.exe dockerlogin ghcr.io -u alice -p s3cret -o C:\creds\out.json
+oci-to-wsl.exe dockerlogin ghcr.io -u alice -p s3cret -o -
 ```
 
 Only the classic base64-encoded `username:password` format is written;
