@@ -7,6 +7,9 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"time"
+
+	"github.com/schollz/progressbar/v3"
 )
 
 // ImportOptions controls how a WSL distribution is created.
@@ -35,7 +38,32 @@ func Import(opts ImportOptions) error {
 	cmd := exec.Command(wslPath, args...) //nolint:gosec
 	cmd.Stdout = nil
 	cmd.Stderr = nil
+
+	// Spinner while wsl.exe runs (it gives no native progress output).
+	spinner := progressbar.NewOptions(-1,
+		progressbar.OptionSetDescription("Importing into WSL"),
+		progressbar.OptionSpinnerType(14),
+		progressbar.OptionThrottle(100*time.Millisecond),
+		progressbar.OptionSetRenderBlankState(true),
+		progressbar.OptionOnCompletion(func() { fmt.Fprintln(os.Stderr) }),
+	)
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(120 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				_ = spinner.Add(1)
+			}
+		}
+	}()
+
 	out, err := cmd.CombinedOutput()
+	close(done)
+	_ = spinner.Close()
 	if err != nil {
 		return fmt.Errorf("wsl --import failed: %w\n%s", err, strings.TrimSpace(string(out)))
 	}
