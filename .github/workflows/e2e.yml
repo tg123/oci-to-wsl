@@ -61,11 +61,9 @@ jobs:
       - name: Start the imported distribution
         shell: pwsh
         run: |
-          # Explicitly boot the distro. `wsl -d <name> --exec /bin/true` causes
-          # WSL to start the VM and mount the rootfs; without this the first
-          # real command can race with the WSL bootstrap and see an empty
-          # rootfs (getpwnam(root) failed 2, /bin/sh: No such file or directory).
-          wsl.exe -d e2e-alpine --exec /bin/busybox true
+          # Explicitly boot the distro so the first verification command does
+          # not race with WSL's VM startup / rootfs mount.
+          wsl.exe -d e2e-alpine --user root --exec /bin/true
           if ($LASTEXITCODE -ne 0) { throw "failed to start e2e-alpine (exit=$LASTEXITCODE)" }
           Write-Host "--- wsl --list --verbose (after start) ---"
           wsl.exe --list --verbose
@@ -74,19 +72,19 @@ jobs:
         shell: pwsh
         run: |
           Write-Host "--- ls -la / inside the distro ---"
-          wsl.exe -d e2e-alpine --exec /bin/busybox ls -la / 2>&1 | Out-Host
+          wsl.exe -d e2e-alpine --user root --exec /bin/ls -la / 2>&1 | Out-Host
           Write-Host "(exit=$LASTEXITCODE)"
 
-          $release = wsl.exe -d e2e-alpine --user root --exec /bin/busybox cat /etc/alpine-release
+          $release = wsl.exe -d e2e-alpine --user root --exec /bin/cat /etc/alpine-release
           if ($LASTEXITCODE -ne 0) { throw "failed to read /etc/alpine-release" }
           Write-Host "alpine-release: $release"
           if ([string]::IsNullOrWhiteSpace($release)) { throw "/etc/alpine-release was empty" }
 
-          $uname = wsl.exe -d e2e-alpine --user root --exec /bin/busybox uname -a
+          $uname = wsl.exe -d e2e-alpine --user root --exec /bin/uname -a
           if ($LASTEXITCODE -ne 0) { throw "uname failed" }
           Write-Host "uname: $uname"
 
-          $hello = wsl.exe -d e2e-alpine --user root --exec /bin/busybox sh -c "echo hello-from-wsl"
+          $hello = wsl.exe -d e2e-alpine --user root -- sh -c "echo hello-from-wsl"
           if ($LASTEXITCODE -ne 0) { throw "sh -c failed" }
           if ($hello -notmatch 'hello-from-wsl') { throw "unexpected output: $hello" }
 

@@ -1,10 +1,8 @@
 package main
 
 import (
-	"compress/gzip"
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 
@@ -155,26 +153,10 @@ func loadProfile(profile *config.Profile, saveTar string) error {
 		}
 	}()
 
-	// When piping the rootfs straight into `wsl --import` we gzip the tar:
-	// WSL detects the gzip magic and decompresses on the fly, and this format
-	// is the most reliably supported across WSL versions. When the user asked
-	// for --save-tar we keep the tar uncompressed for backwards compatibility.
-	var w io.Writer = tarFile
-	var gzw *gzip.Writer
-	if saveTar == "" {
-		gzw = gzip.NewWriter(tarFile)
-		w = gzw
-	}
-
-	if err := registry.PullToTar(profile.Image, w, registry.PullOptions{
+	if err := registry.PullToTar(profile.Image, tarFile, registry.PullOptions{
 		Platform: profile.Platform,
 	}); err != nil {
 		return fmt.Errorf("pulling image: %w", err)
-	}
-	if gzw != nil {
-		if err := gzw.Close(); err != nil {
-			return fmt.Errorf("finalising rootfs tar: %w", err)
-		}
 	}
 	_ = tarFile.Close()
 

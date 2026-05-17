@@ -2,6 +2,7 @@
 package registry
 
 import (
+	"archive/tar"
 	"fmt"
 	"io"
 	"os"
@@ -80,7 +81,27 @@ func PullToTar(imageRef string, w io.Writer, opts PullOptions) error {
 	)
 	defer func() { _ = bar.Close() }()
 
-	if err := crane.Export(img, io.MultiWriter(w, &safeBarWriter{bar: bar})); err != nil {
+	// crane.Export (via go-containerregistry's mutate.Extract) emits
+	// backslash-separated header names on Windows, which produces a tar that
+	// `wsl --import` accepts but extracts as a flat pile of weirdly named
+	// files at the root (the rootfs ends up effectively empty and unbootable).
+	// Pipe the exported tar through normalizeTarPaths to rewrite header names
+	// to use forward slashes before they reach the destination writer.
+	pr, pw := io.Pipe()
+	exportErr := make(chan error, 1)
+	go func() {
+		err := crane.Export(img, io.MultiWriter(pw, &safeBarWriter{bar: bar}))
+		_ = pw.CloseWithError(err)
+		exportErr <- err
+	}()
+
+	if err := normalizeTarPaths(pr, w); err != nil {
+		_ = pr.CloseWithError(err)
+		// Drain the export goroutine so it doesn't leak.
+		<-exportErr
+		return fmt.Errorf("normalizing rootfs tar: %w", err)
+	}
+	if err := <-exportErr; err != nil {
 		return fmt.Errorf("exporting rootfs tar: %w", err)
 	}
 	return nil
@@ -96,6 +117,46 @@ type safeBarWriter struct {
 func (w *safeBarWriter) Write(p []byte) (int, error) {
 	_ = w.bar.Add(len(p))
 	return len(p), nil
+}
+
+// normalizeTarPaths copies a tar stream from r to w, replacing Windows-style
+// backslash separators in each header's Name and Linkname with forward slashes.
+//
+// This works around an upstream bug in github.com/google/go-containerregistry's
+// mutate.Extract (used by crane.Export): it calls filepath.Clean / filepath.Join
+// on tar entry names, which on Windows produces paths like "bin\busybox"
+// instead of "bin/busybox". Such a tar is technically valid but POSIX tar
+// extractors (including the one inside `wsl --import`) treat each entry as a
+// single oddly-named file at the root, leaving the resulting rootfs effectively
+// empty and unbootable.
+//
+// On non-Windows hosts the input never contains backslashes, so this pass is
+// a no-op copy and remains safe to run unconditionally.
+func normalizeTarPaths(r io.Reader, w io.Writer) error {
+	tr := tar.NewReader(r)
+	tw := tar.NewWriter(w)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("reading tar entry: %w", err)
+		}
+		hdr.Name = strings.ReplaceAll(hdr.Name, `\`, "/")
+		if hdr.Linkname != "" {
+			hdr.Linkname = strings.ReplaceAll(hdr.Linkname, `\`, "/")
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			return fmt.Errorf("writing tar header %q: %w", hdr.Name, err)
+		}
+		if hdr.Size > 0 {
+			if _, err := io.Copy(tw, tr); err != nil {
+				return fmt.Errorf("copying tar body %q: %w", hdr.Name, err)
+			}
+		}
+	}
+	return tw.Close()
 }
 
 func humanBytes(n int64) string {
