@@ -62,6 +62,9 @@ copies:                          # optional – injected into the rootfs tar so 
     dst: /opt/assets
   - src: '%USERPROFILE%\.gitconfig'  # %VAR%, $VAR / ${VAR} and a leading ~ are expanded
     dst: /root/.gitconfig
+deletes:                         # optional – absolute POSIX paths dropped from the rootfs tar before import
+  - /var/cache/apt               # directories are removed recursively; applied before `copies`
+  - /etc/motd
 init_cmds:                       # optional – run inside the new distro after import
   - apt-get update -y
   - apt-get install -y curl git

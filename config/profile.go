@@ -56,6 +56,15 @@ type Profile struct {
 	// before InitCmds, which can rely on the copied content.
 	Copies []CopyEntry `yaml:"copies"`
 
+	// Deletes is a list of absolute POSIX paths inside the distribution
+	// to remove from the rootfs tar before `wsl --import` runs. Each
+	// path may name a file or a directory; directories are removed
+	// recursively (every entry under that prefix is dropped). Missing
+	// paths are silently ignored. Deletes are applied before Copies, so
+	// a profile may delete an upstream directory and then stage its own
+	// replacement at the same destination.
+	Deletes []string `yaml:"deletes"`
+
 	// InitCmds is a list of shell commands to run inside the new WSL instance after it is created.
 	InitCmds []string `yaml:"init_cmds"`
 

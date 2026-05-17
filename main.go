@@ -168,6 +168,15 @@ func loadProfile(profile *config.Profile, saveTar string) error {
 	}
 	_ = tarFile.Close()
 
+	// Apply any profile-driven deletions before staging copies, so a
+	// profile can drop an upstream directory and then place its own
+	// replacement at the same destination.
+	if len(profile.Deletes) > 0 {
+		if err := wsl.ApplyDeletes(tarPath, profile.Deletes); err != nil {
+			return fmt.Errorf("applying deletes to rootfs tar: %w", err)
+		}
+	}
+
 	// Inject any host files/directories directly into the rootfs tar so
 	// they are present in the distribution as soon as wsl.exe --import
 	// finishes, before any init_cmds run. This avoids any dependency on a
