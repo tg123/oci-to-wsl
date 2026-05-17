@@ -34,24 +34,28 @@ type PullOptions struct {
 
 // PullToTar pulls the OCI image identified by imageRef and writes the flattened
 // rootfs tar to w.  The flattened tar is suitable for use with "wsl --import".
+//
+// imageRef may carry an optional source-scheme prefix to load the image from a
+// local container engine instead of a remote registry:
+//
+//	docker-daemon:<image>             load from the local Docker daemon
+//	containerd:<image>                load from local containerd (namespace "default")
+//	containerd://<namespace>/<image>  load from local containerd in <namespace>
+//
+// Without a prefix the reference is pulled from its OCI registry (the default).
 func PullToTar(imageRef string, w io.Writer, opts PullOptions) error {
-	ref, err := name.ParseReference(imageRef)
-	if err != nil {
-		return fmt.Errorf("parsing image reference %q: %w", imageRef, err)
-	}
+	parsed := ParseRef(imageRef)
 
 	platform, err := resolvePlatform(opts.Platform)
 	if err != nil {
 		return err
 	}
 
-	pullOpts := buildCraneOptions(ref, platform, opts)
-
-	fmt.Printf("Pulling image %s (%s/%s) ...\n", ref, platform.OS, platform.Architecture)
-	img, err := crane.Pull(imageRef, pullOpts...)
+	img, cleanup, err := loadImage(parsed, platform, opts)
 	if err != nil {
-		return fmt.Errorf("pulling image %q: %w", imageRef, err)
+		return err
 	}
+	defer cleanup()
 
 	// crane.Export writes uncompressed tar bytes to w. Image manifests only
 	// contain compressed layer sizes, so use a 3x heuristic to estimate the

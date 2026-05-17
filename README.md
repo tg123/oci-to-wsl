@@ -14,9 +14,29 @@ oci-to-wsl.exe --image ubuntu:22.04 --name my-ubuntu
 # From Azure Container Registry (browser login opens automatically)
 oci-to-wsl.exe --image myacr.azurecr.io/myimage:latest --name myimage
 
+# From a local Docker daemon (no registry round-trip)
+oci-to-wsl.exe --image docker-daemon:ubuntu:22.04 --name my-ubuntu
+
+# From a local containerd namespace (requires the 'ctr' CLI in PATH)
+oci-to-wsl.exe --image containerd://k8s.io/alpine:3.20 --name my-alpine
+
 # Using a YAML profile
 oci-to-wsl.exe --profile ubuntu.yaml
 ```
+
+## Image sources
+
+By default `--image` references are pulled from a remote OCI registry. The
+following optional scheme prefixes load the image from a local container engine
+instead, which avoids the registry round-trip when the image is already cached
+on the host:
+
+| Prefix | Source | Notes |
+|---|---|---|
+| _(none)_ | remote registry | default; uses Docker keychain / ACR browser login |
+| `docker-daemon:<image>` | local Docker daemon | discovered via `DOCKER_HOST` / default socket |
+| `containerd:<image>` | local containerd (namespace `default`) | requires the `ctr` CLI in `PATH` |
+| `containerd://<namespace>/<image>` | local containerd in `<namespace>` | requires the `ctr` CLI in `PATH` |
 
 ## YAML profile
 

@@ -94,3 +94,105 @@ jobs:
         run: |
           wsl.exe --unregister e2e-alpine
           if ($LASTEXITCODE -ne 0) { Write-Host "unregister failed (non-fatal)" }
+
+  e2e-docker-daemon:
+    name: Load alpine from local docker daemon
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: 'stable'
+          cache: true
+
+      - name: Build oci-to-wsl
+        env:
+          CGO_ENABLED: 0
+        run: go build -trimpath -o oci-to-wsl .
+
+      - name: Ensure docker is running and seed alpine:latest
+        run: |
+          docker version
+          docker pull alpine:latest
+          docker image inspect alpine:latest >/dev/null
+
+      - name: Export rootfs tar from docker daemon
+        run: |
+          ./oci-to-wsl --image docker-daemon:alpine:latest --save-tar alpine-docker.tar
+          ls -lh alpine-docker.tar
+
+      - name: Verify exported rootfs tar looks like an alpine rootfs
+        run: |
+          # The flattened rootfs tar should contain the usual top-level dirs
+          # and /etc/alpine-release. Use tar -tf to inspect without extracting.
+          tar -tf alpine-docker.tar | head -50
+          if ! tar -tf alpine-docker.tar | grep -qE '(^|/)etc/alpine-release$'; then
+            echo "etc/alpine-release missing from rootfs tar"
+            exit 1
+          fi
+          # Extract and read alpine-release to make sure the file is non-empty.
+          mkdir rootfs-docker
+          tar -xf alpine-docker.tar -C rootfs-docker ./etc/alpine-release 2>/dev/null || \
+            tar -xf alpine-docker.tar -C rootfs-docker etc/alpine-release
+          test -s rootfs-docker/etc/alpine-release
+          echo "alpine-release: $(cat rootfs-docker/etc/alpine-release)"
+
+  e2e-containerd:
+    name: Load alpine from local containerd
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: 'stable'
+          cache: true
+
+      - name: Build oci-to-wsl
+        env:
+          CGO_ENABLED: 0
+        run: go build -trimpath -o oci-to-wsl .
+
+      - name: Install containerd and the ctr CLI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y containerd
+          sudo systemctl enable --now containerd
+          # Give containerd a moment to come up and create its socket.
+          for i in 1 2 3 4 5; do
+            if sudo ctr version >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          sudo ctr version
+
+      - name: Seed alpine:latest into containerd (namespace=default)
+        run: |
+          sudo ctr images pull docker.io/library/alpine:latest
+          sudo ctr images ls | grep alpine
+
+      - name: Export rootfs tar from containerd
+        run: |
+          # ctr requires root to reach /run/containerd/containerd.sock, so run
+          # the tool with sudo. Pass an absolute path to the freshly built
+          # binary since sudo's PATH may not include the workspace.
+          sudo "$PWD/oci-to-wsl" --image containerd:docker.io/library/alpine:latest --save-tar alpine-ctr.tar
+          sudo chown "$USER" alpine-ctr.tar
+          ls -lh alpine-ctr.tar
+
+      - name: Verify exported rootfs tar looks like an alpine rootfs
+        run: |
+          tar -tf alpine-ctr.tar | head -50
+          if ! tar -tf alpine-ctr.tar | grep -qE '(^|/)etc/alpine-release$'; then
+            echo "etc/alpine-release missing from rootfs tar"
+            exit 1
+          fi
+          mkdir rootfs-ctr
+          tar -xf alpine-ctr.tar -C rootfs-ctr ./etc/alpine-release 2>/dev/null || \
+            tar -xf alpine-ctr.tar -C rootfs-ctr etc/alpine-release
+          test -s rootfs-ctr/etc/alpine-release
+          echo "alpine-release: $(cat rootfs-ctr/etc/alpine-release)"
