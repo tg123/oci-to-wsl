@@ -73,7 +73,7 @@ func Import(opts ImportOptions) error {
 	_ = spinner.Close()
 	slog.Debug("wsl.exe --import finished",
 		"duration", time.Since(start),
-		"exit_code", cmd.ProcessState.ExitCode(),
+		"exit_code", exitCode(cmd),
 		"output_bytes", len(out),
 	)
 	if len(out) > 0 {
@@ -103,7 +103,7 @@ func RunCommand(distro, command string) error {
 	slog.Debug("wsl.exe command finished",
 		"distro", distro,
 		"duration", time.Since(start),
-		"exit_code", cmd.ProcessState.ExitCode(),
+		"exit_code", exitCode(cmd),
 		"output_bytes", len(out),
 	)
 	fmt.Print(string(out))
@@ -126,4 +126,14 @@ func findWSL() (string, error) {
 		return winPath, nil
 	}
 	return "", fmt.Errorf("wsl.exe not found on %s; ensure you are running on Windows with WSL installed", runtime.GOOS)
+}
+
+// exitCode returns cmd.ProcessState.ExitCode() if available, or -1 when the
+// process never started (e.g. exec lookup failure), avoiding a nil-pointer
+// dereference in log fields.
+func exitCode(cmd *exec.Cmd) int {
+	if cmd == nil || cmd.ProcessState == nil {
+		return -1
+	}
+	return cmd.ProcessState.ExitCode()
 }

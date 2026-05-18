@@ -237,11 +237,11 @@ func loadProfile(profile *config.Profile, saveTar string) error {
 			size = fi.Size()
 		}
 		slog.Info("wrote rootfs tar", "path", tarPath, "bytes", size)
-		if size > 0 {
-			fmt.Printf("Wrote rootfs tar to %s (%d bytes)\n", tarPath, size)
-		} else {
-			fmt.Printf("Wrote rootfs tar to %s\n", tarPath)
+		fmt.Printf("Wrote rootfs tar to %s", tarPath)
+		if fi != nil {
+			fmt.Printf(" (%d bytes)", fi.Size())
 		}
+		fmt.Println()
 		return nil
 	}
 
