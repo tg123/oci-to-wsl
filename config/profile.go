@@ -366,6 +366,13 @@ func LoadProfile(path string) (*Profile, error) {
 	if p.WslConf != nil && p.WslConf.Content != "" {
 		p.WslConf.Content = ExpandEnvVars(p.WslConf.Content)
 	}
+
+	// Expand environment variables in wsl_conf content so users can write
+	// e.g. `default=$USER` or `default=%USERNAME%` and have it resolved at
+	// profile-load time on the host.
+	if p.WslConf != nil && p.WslConf.Content != "" {
+		p.WslConf.Content = ExpandEnvVars(p.WslConf.Content)
+	}
 	return &p, nil
 }
 
