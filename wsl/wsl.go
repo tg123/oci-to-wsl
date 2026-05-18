@@ -162,7 +162,7 @@ func RunCommand(distro, command string, opts RunOptions) error {
 }
 
 // shellSingleQuote wraps s in POSIX single quotes, escaping any embedded
-// single quotes as the conventional `'\''` sequence. The result is safe
+// single quotes as the conventional `'\”` sequence. The result is safe
 // to use as a single shell word in any POSIX-compatible shell.
 func shellSingleQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
