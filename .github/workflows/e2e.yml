@@ -9,12 +9,12 @@ permissions:
   contents: read
 
 jobs:
-  e2e-wsl-import:
-    name: Pull alpine and import into WSL
+  e2e-windows:
+    name: WSL end-to-end (Go test runner)
     runs-on: windows-latest
     env:
-      # Force wsl.exe to emit UTF-8 instead of UTF-16 LE so PowerShell string
-      # matching on its output works as expected.
+      # Force wsl.exe to emit UTF-8 instead of UTF-16 LE so output captured
+      # by the Go test runner is decodable as plain UTF-8.
       WSL_UTF8: "1"
     steps:
       - name: Checkout repository
@@ -31,198 +31,30 @@ jobs:
           CGO_ENABLED: 0
         run: go build -trimpath -o oci-to-wsl.exe .
 
-      - name: Enable WSL
+      - name: Show WSL status
         shell: pwsh
         run: |
-          # windows-latest runners ship with wsl.exe; make sure it is on PATH.
           wsl.exe --status
           wsl.exe --version
 
-      - name: Import alpine:latest into WSL
+      - name: Run end-to-end test suite
         shell: pwsh
-        run: |
-          $installDir = Join-Path $PWD 'wsl-e2e-alpine'
-          Write-Host "Install dir: $installDir"
-          .\oci-to-wsl.exe --image alpine:latest --name e2e-alpine --dir $installDir
-          if ($LASTEXITCODE -ne 0) { throw "oci-to-wsl failed with exit code $LASTEXITCODE" }
-          Write-Host "--- install dir contents ---"
-          Get-ChildItem -Force $installDir | Format-Table -AutoSize
-
-      - name: Verify the distribution was created
-        shell: pwsh
-        run: |
-          Write-Host "--- wsl --list --verbose ---"
-          wsl.exe --list --verbose
-          Write-Host "--- wsl --list --quiet ---"
-          $list = wsl.exe --list --quiet
-          Write-Host $list
-          if ($list -notmatch 'e2e-alpine') { throw "e2e-alpine distribution not found" }
-
-      - name: Start the imported distribution
-        shell: pwsh
-        run: |
-          # Explicitly boot the distro so the first verification command does
-          # not race with WSL's VM startup / rootfs mount.
-          wsl.exe -d e2e-alpine --user root --exec /bin/true
-          if ($LASTEXITCODE -ne 0) { throw "failed to start e2e-alpine (exit=$LASTEXITCODE)" }
-          Write-Host "--- wsl --list --verbose (after start) ---"
-          wsl.exe --list --verbose
-
-      - name: Run commands inside the imported distribution
-        shell: pwsh
-        run: |
-          Write-Host "--- ls -la / inside the distro ---"
-          wsl.exe -d e2e-alpine --user root --exec /bin/ls -la / 2>&1 | Out-Host
-          Write-Host "(exit=$LASTEXITCODE)"
-
-          $release = wsl.exe -d e2e-alpine --user root --exec /bin/cat /etc/alpine-release
-          if ($LASTEXITCODE -ne 0) { throw "failed to read /etc/alpine-release" }
-          Write-Host "alpine-release: $release"
-          if ([string]::IsNullOrWhiteSpace($release)) { throw "/etc/alpine-release was empty" }
-
-          $uname = wsl.exe -d e2e-alpine --user root --exec /bin/uname -a
-          if ($LASTEXITCODE -ne 0) { throw "uname failed" }
-          Write-Host "uname: $uname"
-
-          $hello = wsl.exe -d e2e-alpine --user root -- sh -c "echo hello-from-wsl"
-          if ($LASTEXITCODE -ne 0) { throw "sh -c failed" }
-          if ($hello -notmatch 'hello-from-wsl') { throw "unexpected output: $hello" }
-
-      - name: Tear down the test distribution
-        if: always()
-        shell: pwsh
-        run: |
-          wsl.exe --unregister e2e-alpine
-          if ($LASTEXITCODE -ne 0) { Write-Host "unregister failed (non-fatal)" }
-
-  e2e-wsl-copy-and-init:
-    name: Profile copies + init_cmds
-    runs-on: windows-latest
-    env:
-      WSL_UTF8: "1"
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version: 'stable'
-          cache: true
-
-      - name: Build oci-to-wsl
         env:
-          CGO_ENABLED: 0
-        run: go build -trimpath -o oci-to-wsl.exe .
-
-      - name: Enable WSL
-        shell: pwsh
+          # Point the e2e tests at the binary we just built. The test
+          # runner requires OCI_TO_WSL_BIN and does not build the binary
+          # itself.
+          OCI_TO_WSL_BIN: ${{ github.workspace }}\oci-to-wsl.exe
         run: |
-          wsl.exe --status
-          wsl.exe --version
+          go test -tags=e2e -timeout 30m -v -run TestE2E .
 
-      - name: Prepare profile, files and folder to copy
-        shell: pwsh
-        run: |
-          $work = Join-Path $PWD 'e2e-copy'
-          New-Item -ItemType Directory -Force -Path $work | Out-Null
-          New-Item -ItemType Directory -Force -Path (Join-Path $work 'scripts') | Out-Null
-          New-Item -ItemType Directory -Force -Path (Join-Path $work 'assets/nested') | Out-Null
-
-          # A script the init_cmds will execute. The init step must observe
-          # the executable bit set by 'mode: "0755"'. Write with LF line
-          # endings: Set-Content on Windows defaults to CRLF, which would
-          # turn the shebang into "#!/bin/sh\r" and produce busybox's
-          # cryptic "not found" error at exec time.
-          $script = "#!/bin/sh`nset -e`necho `"bootstrap-ran`" > /tmp/bootstrap-marker`ncat /opt/assets/hello.txt > /tmp/assets-hello`ncat /opt/assets/nested/inner.txt > /tmp/assets-inner`n"
-          [System.IO.File]::WriteAllText((Join-Path $work 'scripts/bootstrap.sh'), $script)
-
-          Set-Content -NoNewline -Path (Join-Path $work 'assets/hello.txt') -Value 'hello-from-host'
-          Set-Content -NoNewline -Path (Join-Path $work 'assets/nested/inner.txt') -Value 'nested-from-host'
-
-          $profile = @'
-          name: e2e-copy
-          image: alpine:latest
-          copies:
-            - src: ./scripts/bootstrap.sh
-              dst: /usr/local/bin/bootstrap.sh
-              mode: "0755"
-            - src: ./assets
-              dst: /opt/assets
-              mode: "0777"
-          init_cmds:
-            - /usr/local/bin/bootstrap.sh
-          '@
-          Set-Content -Path (Join-Path $work 'profile.yaml') -Value $profile
-          Get-ChildItem -Recurse $work | Format-Table -AutoSize
-
-      - name: Import with profile (copies run before init_cmds)
-        shell: pwsh
-        run: |
-          $work = Join-Path $PWD 'e2e-copy'
-          $installDir = Join-Path $PWD 'wsl-e2e-copy'
-          .\oci-to-wsl.exe --profile (Join-Path $work 'profile.yaml') --dir $installDir
-          if ($LASTEXITCODE -ne 0) { throw "oci-to-wsl failed with exit code $LASTEXITCODE" }
-
-      - name: Verify copied file content and mode
-        shell: pwsh
-        run: |
-          $contents = wsl.exe -d e2e-copy --user root --exec /bin/cat /usr/local/bin/bootstrap.sh
-          if ($LASTEXITCODE -ne 0) { throw "cat bootstrap.sh failed" }
-          # wsl.exe returns a string[] for multi-line output; PowerShell's
-          # -notmatch on an array is a filter (returns non-matching items),
-          # which is truthy whenever ANY line lacks the pattern. Join first
-          # so we test the full content as a single string.
-          $contentsStr = ($contents | Out-String)
-          if ($contentsStr -notmatch 'bootstrap-ran') { throw "bootstrap.sh content unexpected: $contentsStr" }
-
-          $mode = wsl.exe -d e2e-copy --user root -- sh -c "stat -c '%a' /usr/local/bin/bootstrap.sh"
-          if ($LASTEXITCODE -ne 0) { throw "stat bootstrap.sh failed" }
-          $mode = ($mode | Out-String).Trim()
-          Write-Host "bootstrap.sh mode: $mode"
-          if ($mode -ne '755') { throw "bootstrap.sh mode: got '$mode', want '755'" }
-
-      - name: Verify copied directory content and recursive mode
-        shell: pwsh
-        run: |
-          $hello = wsl.exe -d e2e-copy --user root --exec /bin/cat /opt/assets/hello.txt
-          if ($LASTEXITCODE -ne 0) { throw "cat hello.txt failed" }
-          $helloStr = ($hello | Out-String)
-          if ($helloStr -notmatch 'hello-from-host') { throw "hello.txt content unexpected: $helloStr" }
-
-          $inner = wsl.exe -d e2e-copy --user root --exec /bin/cat /opt/assets/nested/inner.txt
-          if ($LASTEXITCODE -ne 0) { throw "cat inner.txt failed" }
-          $innerStr = ($inner | Out-String)
-          if ($innerStr -notmatch 'nested-from-host') { throw "inner.txt content unexpected: $innerStr" }
-
-          $dirMode = wsl.exe -d e2e-copy --user root -- sh -c "stat -c '%a' /opt/assets"
-          $dirMode = ($dirMode | Out-String).Trim()
-          Write-Host "/opt/assets mode: $dirMode"
-          if ($dirMode -ne '777') { throw "/opt/assets mode: got '$dirMode', want '777'" }
-
-          $fileMode = wsl.exe -d e2e-copy --user root -- sh -c "stat -c '%a' /opt/assets/nested/inner.txt"
-          $fileMode = ($fileMode | Out-String).Trim()
-          Write-Host "/opt/assets/nested/inner.txt mode: $fileMode"
-          if ($fileMode -ne '777') { throw "recursive chmod failed: got '$fileMode', want '777'" }
-
-      - name: Verify init_cmds ran after copy
-        shell: pwsh
-        run: |
-          $marker = wsl.exe -d e2e-copy --user root --exec /bin/cat /tmp/bootstrap-marker
-          if ($LASTEXITCODE -ne 0) { throw "bootstrap-marker missing - init_cmds did not run after copy" }
-          $markerStr = ($marker | Out-String)
-          if ($markerStr -notmatch 'bootstrap-ran') { throw "bootstrap-marker content unexpected: $markerStr" }
-
-          $assetsHello = wsl.exe -d e2e-copy --user root --exec /bin/cat /tmp/assets-hello
-          $assetsHelloStr = ($assetsHello | Out-String)
-          if ($assetsHelloStr -notmatch 'hello-from-host') { throw "init script could not read copied asset: $assetsHelloStr" }
-
-      - name: Tear down the test distribution
+      - name: Tear down leftover test distributions
         if: always()
         shell: pwsh
         run: |
-          wsl.exe --unregister e2e-copy
-          if ($LASTEXITCODE -ne 0) { Write-Host "unregister failed (non-fatal)" }
+          foreach ($d in @('e2e-alpine','e2e-copy')) {
+            wsl.exe --unregister $d 2>$null
+          }
+          exit 0
 
   e2e-docker-daemon:
     name: Load alpine from local docker daemon
