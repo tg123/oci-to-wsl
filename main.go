@@ -223,7 +223,6 @@ func loadProfile(profile *config.Profile, saveTar string) error {
 			len(profile.Deletes), len(profile.Copies))
 	}
 	if !skipTarMods && len(profile.Deletes) > 0 {
-		slog.Debug("applying profile deletes", "count", len(profile.Deletes))
 		if err := wsl.ApplyDeletes(tarPath, profile.Deletes); err != nil {
 			return fmt.Errorf("applying deletes to rootfs tar: %w", err)
 		}
@@ -234,7 +233,6 @@ func loadProfile(profile *config.Profile, saveTar string) error {
 	// finishes, before any init_cmds run. This avoids any dependency on a
 	// tar binary inside the container.
 	if !skipTarMods && len(profile.Copies) > 0 {
-		slog.Debug("staging profile copies into rootfs tar", "count", len(profile.Copies))
 		injects := make([]wsl.CopyEntry, 0, len(profile.Copies))
 		for _, c := range profile.Copies {
 			if c.Src == "" || c.Dst == "" {
