@@ -184,6 +184,7 @@ init_cmds:
 				// effectively writes a fresh file. The [user] section
 				// uses %WSL_CONF_E2E_USER% which must be expanded to
 				// "alice" by ExpandEnvVars at profile-load time.
+				t.Setenv("WSL_CONF_E2E_USER", "alice")
 				profile := `name: e2e-wslconf
 image: alpine:latest
 wsl_conf:
@@ -223,6 +224,7 @@ wsl_conf:
 				// raw INI string. Validates that the mapping form renders
 				// to the same INI and that env-var expansion still runs
 				// over the rendered text.
+				t.Setenv("WSL_CONF_E2E_USER", "alice")
 				profile := `name: e2e-wslconf-yaml
 image: alpine:latest
 wsl_conf:

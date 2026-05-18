@@ -22,10 +22,6 @@ jobs:
       # Force wsl.exe to emit UTF-8 instead of UTF-16 LE so output captured
       # by the Go test runner is decodable as plain UTF-8.
       WSL_UTF8: "1"
-      # Consumed by the wsl_conf e2e cases (TestE2E/profile_wsl_conf_*) to
-      # prove host env vars are expanded into wsl_conf.content at
-      # profile-load time.
-      WSL_CONF_E2E_USER: "alice"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
