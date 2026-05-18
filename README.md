@@ -97,7 +97,7 @@ deletes:                         # optional – absolute POSIX paths dropped fro
   - /var/cache/apt               # directories are removed recursively; applied before `copies`
   - /etc/motd
 users:                           # optional – Linux users created by editing /etc/passwd, /etc/shadow, /etc/group
-  - name: alice                  # required; must not already exist in the image
+  - name: "%USERNAME%"           # required; %VAR% / $VAR / ${VAR} expanded from host env (e.g. mirror Windows login into WSL)
     uid: 1000                    # optional; auto-allocated from 1000+ when omitted
     gid: 1000                    # optional; defaults to uid (matching primary group created on demand)
     home: /home/alice            # optional; defaults to /home/<name>

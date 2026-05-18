@@ -168,12 +168,55 @@ func LoadProfile(path string) (*Profile, error) {
 		}
 		p.Copies[i].Src = src
 	}
+
+	// Resolve user fields: expand %NAME% / $NAME environment variable
+	// references in fields a profile is likely to want to template against
+	// the host (e.g. name: %USERNAME% or $USER to mirror the Windows login
+	// into the WSL distro). PasswordHash is left untouched because crypt(3)
+	// hashes contain literal '$' sigils that would collide with $NAME
+	// expansion.
+	for i := range p.Users {
+		u := &p.Users[i]
+		u.Name = ExpandEnvVars(u.Name)
+		u.Home = ExpandEnvVars(u.Home)
+		u.Shell = ExpandEnvVars(u.Shell)
+		u.Gecos = ExpandEnvVars(u.Gecos)
+		u.PasswordPlain = ExpandEnvVars(u.PasswordPlain)
+		for j, g := range u.Groups {
+			u.Groups[j] = ExpandEnvVars(g)
+		}
+	}
 	return &p, nil
 }
 
 // winEnvVarRE matches Windows-style %NAME% environment variable references.
 // NAME must be at least one non-% character to avoid matching a literal "%%".
 var winEnvVarRE = regexp.MustCompile(`%([^%]+)%`)
+
+// ExpandEnvVars expands Windows %NAME% and POSIX $NAME / ${NAME} environment
+// variable references in s. Unknown variables are left untouched so a typo
+// surfaces as a downstream error rather than silently becoming an empty
+// string. Unlike ExpandHostPath it does not expand a leading ~, since user
+// fields (login names, gecos, etc.) are not host paths.
+func ExpandEnvVars(s string) string {
+	if s == "" {
+		return s
+	}
+	s = winEnvVarRE.ReplaceAllStringFunc(s, func(m string) string {
+		name := m[1 : len(m)-1]
+		if v, ok := os.LookupEnv(name); ok {
+			return v
+		}
+		return m
+	})
+	s = os.Expand(s, func(name string) string {
+		if v, ok := os.LookupEnv(name); ok {
+			return v
+		}
+		return "${" + name + "}"
+	})
+	return s
+}
 
 // ExpandHostPath expands environment variable references and a leading ~ in a
 // host path. It supports:
@@ -188,23 +231,7 @@ func ExpandHostPath(p string) string {
 		return p
 	}
 
-	// Expand %NAME% (Windows). Leave unknown vars untouched.
-	p = winEnvVarRE.ReplaceAllStringFunc(p, func(m string) string {
-		name := m[1 : len(m)-1]
-		if v, ok := os.LookupEnv(name); ok {
-			return v
-		}
-		return m
-	})
-
-	// Expand $NAME / ${NAME} (POSIX). os.Expand returns "" for missing vars;
-	// preserve the original token instead.
-	p = os.Expand(p, func(name string) string {
-		if v, ok := os.LookupEnv(name); ok {
-			return v
-		}
-		return "${" + name + "}"
-	})
+	p = ExpandEnvVars(p)
 
 	// Expand a leading ~ or ~/ (or ~\ on Windows) to the user's home dir.
 	if p == "~" || strings.HasPrefix(p, "~/") || strings.HasPrefix(p, `~\`) {

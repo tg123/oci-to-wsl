@@ -52,10 +52,15 @@ deletes:
 # written verbatim into /etc/shadow; generate one with e.g.
 # `openssl passwd -6`. Alternatively, set `password_plain` and the tool
 # will hash it with SHA-512 crypt before writing (mutually exclusive with
-# `password_hash`). Supplementary `groups` that don't exist in the image
-# are silently skipped so a profile stays portable across base images.
+# `password_hash`). String fields (`name`, `home`, `shell`, `gecos`, `groups`,
+# `password_plain`) support Windows %NAME% and POSIX $NAME / ${NAME}
+# environment-variable references that are expanded against the host at load
+# time — handy for mirroring the current Windows login into the distro, e.g.
+# `name: "%USERNAME%"` or `name: "$USER"`. Supplementary `groups` that don't
+# exist in the image are silently skipped so a profile stays portable across
+# base images.
 users:
-  - name: alice
+  - name: "%USERNAME%"
     shell: /bin/bash
     gecos: "Alice Example"
     groups: [sudo]

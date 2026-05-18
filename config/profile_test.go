@@ -186,6 +186,50 @@ func TestExpandHostPath_TildeAndUnknownVars(t *testing.T) {
 	}
 }
 
+func TestLoadProfile_ExpandsUserEnvVars(t *testing.T) {
+	t.Setenv("OCI_TO_WSL_TEST_USER", "alice")
+	t.Setenv("OCI_TO_WSL_TEST_SHELL", "/bin/zsh")
+	yaml := `
+name: test
+image: ubuntu:22.04
+users:
+  - name: "%OCI_TO_WSL_TEST_USER%"
+    home: "/home/$OCI_TO_WSL_TEST_USER"
+    shell: "${OCI_TO_WSL_TEST_SHELL}"
+    gecos: "Hello %OCI_TO_WSL_TEST_USER%"
+    groups: ["%OCI_TO_WSL_TEST_USER%-admins"]
+    password_plain: "pw-%OCI_TO_WSL_TEST_USER%"
+    password_hash: "$6$abc$def"
+`
+	p := writeAndLoad(t, yaml)
+	if len(p.Users) != 1 {
+		t.Fatalf("expected 1 user, got %d", len(p.Users))
+	}
+	u := p.Users[0]
+	if u.Name != "alice" {
+		t.Errorf("Name: got %q, want alice", u.Name)
+	}
+	if u.Home != "/home/alice" {
+		t.Errorf("Home: got %q, want /home/alice", u.Home)
+	}
+	if u.Shell != "/bin/zsh" {
+		t.Errorf("Shell: got %q, want /bin/zsh", u.Shell)
+	}
+	if u.Gecos != "Hello alice" {
+		t.Errorf("Gecos: got %q", u.Gecos)
+	}
+	if len(u.Groups) != 1 || u.Groups[0] != "alice-admins" {
+		t.Errorf("Groups: got %v", u.Groups)
+	}
+	if u.PasswordPlain != "pw-alice" {
+		t.Errorf("PasswordPlain: got %q", u.PasswordPlain)
+	}
+	// PasswordHash must be left untouched even though it contains '$' sigils.
+	if u.PasswordHash != "$6$abc$def" {
+		t.Errorf("PasswordHash should not be expanded: got %q", u.PasswordHash)
+	}
+}
+
 // writeAndLoad writes yaml content to a temp file and calls LoadProfile.
 func writeAndLoad(t *testing.T, yamlContent string) *config.Profile {
 	t.Helper()
