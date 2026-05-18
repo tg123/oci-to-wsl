@@ -52,9 +52,9 @@ func TestE2EDockerDaemon(t *testing.T) {
 	}
 
 	const (
-		baseImage  = "alpine:latest"
-		localOnly  = "oci-to-wsl-e2e/local-only:notpublished"
-		alpineRel  = "etc/alpine-release"
+		baseImage = "alpine:latest"
+		localOnly = "oci-to-wsl-e2e/local-only:notpublished"
+		alpineRel = "etc/alpine-release"
 	)
 
 	// Seed an image that only exists on the local daemon: pull alpine,
