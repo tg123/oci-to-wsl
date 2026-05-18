@@ -49,6 +49,17 @@ $env:OCI_TO_WSL_PLATFORM = 'linux/arm64'
 oci-to-wsl.exe --image ubuntu:22.04 --save-tar ubuntu-arm64.tar
 ```
 
+Profile-driven tar modifications (`copies` and `deletes`) are applied to the
+rootfs tar in `--save-tar` mode as well, so the saved artifact matches what
+would be imported into WSL. Set `OCI_TO_WSL_NO_TAR_MODS=1` (also accepts
+`true`/`True`/`TRUE`/`t`) to skip them and obtain the rootfs exactly as
+exported from the image:
+
+```powershell
+$env:OCI_TO_WSL_NO_TAR_MODS = '1'
+oci-to-wsl.exe --profile ubuntu.yaml --save-tar ubuntu.tar
+```
+
 ## Logging in to a private registry (no docker CLI required)
 
 `oci-to-wsl` reads classic basic-auth entries from `~/.docker/config.json`
