@@ -184,6 +184,34 @@ func loadProfile(profile *config.Profile, saveTar string) error {
 		}
 	}
 
+	// Create any profile-defined Linux users by editing /etc/passwd,
+	// /etc/shadow, and /etc/group inside the rootfs tar. Runs after
+	// deletes (so a profile can drop upstream account files and start
+	// from a clean slate) and before copies (so a copy targeting the
+	// new home directory overlays onto the dir created here).
+	if len(profile.Users) > 0 {
+		usrs := make([]wsl.UserEntry, 0, len(profile.Users))
+		for _, u := range profile.Users {
+			if strings.TrimSpace(u.Name) == "" {
+				return fmt.Errorf("profile users: 'name' is required")
+			}
+			usrs = append(usrs, wsl.UserEntry{
+				Name:         u.Name,
+				UID:          u.UID,
+				GID:          u.GID,
+				Home:         u.Home,
+				Shell:        u.Shell,
+				Gecos:        u.Gecos,
+				Groups:       u.Groups,
+				PasswordHash: u.PasswordHash,
+				NoCreateHome: u.NoCreateHome,
+			})
+		}
+		if err := wsl.ApplyUsers(tarPath, usrs); err != nil {
+			return fmt.Errorf("creating users in rootfs tar: %w", err)
+		}
+	}
+
 	// Inject any host files/directories directly into the rootfs tar so
 	// they are present in the distribution as soon as wsl.exe --import
 	// finishes, before any init_cmds run. This avoids any dependency on a

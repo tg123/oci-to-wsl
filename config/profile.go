@@ -38,6 +38,54 @@ type CopyEntry struct {
 	Mode string `yaml:"mode"`
 }
 
+// User describes a Linux user account to create inside the imported WSL
+// distribution by editing /etc/passwd, /etc/shadow, and /etc/group
+// directly in the rootfs tar (no useradd/adduser is invoked inside the
+// container). Users are applied before Copies, so a Copy targeting the
+// new home directory will see correct ownership semantics.
+type User struct {
+	// Name is the login name. Required and must be unique inside the
+	// upstream image's /etc/passwd.
+	Name string `yaml:"name"`
+
+	// UID, when > 0, sets the numeric user id. When omitted (0), the
+	// next free id starting at 1000 is allocated automatically.
+	UID int `yaml:"uid"`
+
+	// GID, when > 0, sets the primary group id. When omitted (0), GID
+	// defaults to the resolved UID when free, otherwise to the next
+	// free id starting at 1000. A matching /etc/group entry is created
+	// on demand when no existing group uses that gid.
+	GID int `yaml:"gid"`
+
+	// Home is the absolute POSIX path of the user's home directory.
+	// Defaults to "/home/<name>".
+	Home string `yaml:"home"`
+
+	// Shell is the user's login shell. Defaults to "/bin/sh".
+	Shell string `yaml:"shell"`
+
+	// Gecos is the comment / full-name field in /etc/passwd. Optional.
+	Gecos string `yaml:"gecos"`
+
+	// Groups is a list of supplementary group names to add the user to.
+	// Groups that don't exist in /etc/group are silently skipped so a
+	// profile can portably ask for e.g. "sudo" or "wheel" without
+	// breaking on images that lack them.
+	Groups []string `yaml:"groups"`
+
+	// PasswordHash is written verbatim into the /etc/shadow password
+	// field. An empty value disables password login by writing "!".
+	// Supply a hash produced by e.g. `openssl passwd -6` to set a real
+	// password; plaintext passwords are intentionally not supported.
+	PasswordHash string `yaml:"password_hash"`
+
+	// NoCreateHome, when true, suppresses creation of the home
+	// directory entry in the rootfs tar. The default (false) emits a
+	// directory entry at Home owned by the new uid:gid with mode 0700.
+	NoCreateHome bool `yaml:"no_create_home"`
+}
+
 // Profile describes a WSL instance to create from an OCI image.
 type Profile struct {
 	// Name is the WSL distribution name.
@@ -64,6 +112,13 @@ type Profile struct {
 	// a profile may delete an upstream directory and then stage its own
 	// replacement at the same destination.
 	Deletes []string `yaml:"deletes"`
+
+	// Users is a list of Linux user accounts to create by editing
+	// /etc/passwd, /etc/shadow, and /etc/group inside the rootfs tar.
+	// Users are applied between Deletes and Copies, so the new account
+	// exists on first boot and any Copy targeting the user's home
+	// directory will overlay onto the directory created here.
+	Users []User `yaml:"users"`
 
 	// InitCmds is a list of shell commands to run inside the new WSL instance after it is created.
 	InitCmds []string `yaml:"init_cmds"`

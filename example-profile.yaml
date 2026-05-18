@@ -43,6 +43,25 @@ deletes:
   - /var/cache/apt
   - /etc/motd
 
+# Optional: Linux users created by editing /etc/passwd, /etc/shadow and
+# /etc/group directly in the rootfs tar (no useradd/adduser is invoked
+# inside the container). Users are applied after `deletes` and before
+# `copies`, so the account exists on first boot and a `copy` targeting the
+# user's home directory overlays onto the directory created here. `uid` and
+# `gid` are auto-allocated from 1000+ when omitted. `password_hash` is
+# written verbatim into /etc/shadow; generate one with e.g.
+# `openssl passwd -6`. Supplementary `groups` that don't exist in the image
+# are silently skipped so a profile stays portable across base images.
+users:
+  - name: alice
+    shell: /bin/bash
+    gecos: "Alice Example"
+    groups: [sudo]
+  - name: bob
+    uid: 1500
+    home: /srv/bob
+    password_hash: "$6$rounds=656000$abcdefghij$..."
+
 # Optional: shell commands to run inside the new WSL instance after import.
 init_cmds:
   - apt-get update -y

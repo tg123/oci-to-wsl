@@ -1,0 +1,327 @@
+package wsl_test
+
+import (
+	"archive/tar"
+	"path/filepath"
+	"sort"
+	"strings"
+	"testing"
+
+	"github.com/tg123/oci-to-wsl/wsl"
+)
+
+// baseAccountTar writes a minimal /etc/passwd, /etc/shadow, /etc/group
+// triple plus an unrelated file so we can assert untouched entries
+// survive a rewrite. Returned path holds the tar archive.
+func baseAccountTar(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	tarPath := filepath.Join(dir, "rootfs.tar")
+	writeTar(t, tarPath, []tarEntry{
+		{hdr: tar.Header{Name: "etc/passwd", Mode: 0o644, Typeflag: tar.TypeReg},
+			body: []byte("root:x:0:0:root:/root:/bin/sh\nbin:x:1:1:bin:/bin:/sbin/nologin\n")},
+		{hdr: tar.Header{Name: "etc/shadow", Mode: 0o640, Typeflag: tar.TypeReg},
+			body: []byte("root:*:::::::\nbin:*:::::::\n")},
+		{hdr: tar.Header{Name: "etc/group", Mode: 0o644, Typeflag: tar.TypeReg},
+			body: []byte("root:x:0:\nbin:x:1:\nsudo:x:27:\n")},
+		{hdr: tar.Header{Name: "etc/hostname", Mode: 0o644, Typeflag: tar.TypeReg},
+			body: []byte("alpine\n")},
+	})
+	return tarPath
+}
+
+// findPasswdLine returns the colon-split fields for the named user in
+// the /etc/passwd body, or nil when absent.
+func findPasswdLine(body []byte, name string) []string {
+	for _, l := range strings.Split(strings.TrimRight(string(body), "\n"), "\n") {
+		f := strings.SplitN(l, ":", 7)
+		if len(f) >= 1 && f[0] == name {
+			return f
+		}
+	}
+	return nil
+}
+
+// findGroupLine returns the colon-split fields for the named group in
+// the /etc/group body, or nil when absent.
+func findGroupLine(body []byte, name string) []string {
+	for _, l := range strings.Split(strings.TrimRight(string(body), "\n"), "\n") {
+		f := strings.SplitN(l, ":", 4)
+		if len(f) >= 1 && f[0] == name {
+			return f
+		}
+	}
+	return nil
+}
+
+func TestApplyUsers_AutoAllocateUIDAndGID(t *testing.T) {
+	tarPath := baseAccountTar(t)
+	if err := wsl.ApplyUsers(tarPath, []wsl.UserEntry{{Name: "alice"}}); err != nil {
+		t.Fatalf("ApplyUsers: %v", err)
+	}
+	got := readTar(t, tarPath)
+
+	pw := findPasswdLine(got["etc/passwd"].body, "alice")
+	if pw == nil {
+		t.Fatalf("alice not in /etc/passwd: %q", got["etc/passwd"].body)
+	}
+	if pw[2] != "1000" || pw[3] != "1000" {
+		t.Fatalf("expected uid=1000 gid=1000, got uid=%s gid=%s", pw[2], pw[3])
+	}
+	if pw[5] != "/home/alice" {
+		t.Fatalf("expected home=/home/alice, got %q", pw[5])
+	}
+	if pw[6] != "/bin/sh" {
+		t.Fatalf("expected shell=/bin/sh, got %q", pw[6])
+	}
+
+	sh := findPasswdLine(got["etc/shadow"].body, "alice") // same parser works
+	if sh == nil {
+		t.Fatalf("alice not in /etc/shadow: %q", got["etc/shadow"].body)
+	}
+	if sh[1] != "!" {
+		t.Fatalf("expected shadow hash=!, got %q", sh[1])
+	}
+
+	// A matching primary group must have been created.
+	gr := findGroupLine(got["etc/group"].body, "alice")
+	if gr == nil {
+		t.Fatalf("primary group alice not created: %q", got["etc/group"].body)
+	}
+	if gr[2] != "1000" {
+		t.Fatalf("expected primary gid=1000, got %s", gr[2])
+	}
+
+	// Home directory entry present with ownership.
+	home, ok := got["home/alice/"]
+	if !ok {
+		t.Fatalf("home/alice/ not present; entries: %v", keys(got))
+	}
+	if home.hdr.Typeflag != tar.TypeDir {
+		t.Fatalf("home is not a dir: %v", home.hdr.Typeflag)
+	}
+	if home.hdr.Uid != 1000 || home.hdr.Gid != 1000 {
+		t.Fatalf("expected home owned by 1000:1000, got %d:%d", home.hdr.Uid, home.hdr.Gid)
+	}
+	if home.hdr.Mode != 0o700 {
+		t.Fatalf("expected home mode 0700, got %o", home.hdr.Mode)
+	}
+
+	// Unrelated entries preserved.
+	if string(got["etc/hostname"].body) != "alpine\n" {
+		t.Fatalf("etc/hostname body changed: %q", got["etc/hostname"].body)
+	}
+}
+
+func TestApplyUsers_ExplicitFieldsAndExtraGroups(t *testing.T) {
+	tarPath := baseAccountTar(t)
+	err := wsl.ApplyUsers(tarPath, []wsl.UserEntry{{
+		Name:         "bob",
+		UID:          1500,
+		GID:          1500,
+		Home:         "/srv/bob",
+		Shell:        "/bin/bash",
+		Gecos:        "Bob Builder",
+		Groups:       []string{"sudo", "doesnotexist"},
+		PasswordHash: "$6$abc$hashvalue",
+	}})
+	if err != nil {
+		t.Fatalf("ApplyUsers: %v", err)
+	}
+	got := readTar(t, tarPath)
+
+	pw := findPasswdLine(got["etc/passwd"].body, "bob")
+	want := []string{"bob", "x", "1500", "1500", "Bob Builder", "/srv/bob", "/bin/bash"}
+	if len(pw) != len(want) {
+		t.Fatalf("passwd field count: got %d want %d (%q)", len(pw), len(want), pw)
+	}
+	for i := range want {
+		if pw[i] != want[i] {
+			t.Fatalf("passwd field %d: got %q want %q", i, pw[i], want[i])
+		}
+	}
+
+	sh := findPasswdLine(got["etc/shadow"].body, "bob")
+	if sh[1] != "$6$abc$hashvalue" {
+		t.Fatalf("shadow hash: got %q", sh[1])
+	}
+
+	// sudo group should include bob; doesnotexist must NOT be created.
+	sudo := findGroupLine(got["etc/group"].body, "sudo")
+	if sudo == nil || len(sudo) < 4 {
+		t.Fatalf("sudo group malformed: %v", sudo)
+	}
+	if !contains(strings.Split(sudo[3], ","), "bob") {
+		t.Fatalf("bob not added to sudo group: %q", sudo[3])
+	}
+	if findGroupLine(got["etc/group"].body, "doesnotexist") != nil {
+		t.Fatal("missing group should not have been created")
+	}
+
+	// Home should be /srv/bob.
+	if _, ok := got["srv/bob/"]; !ok {
+		t.Fatalf("srv/bob/ home dir not present; entries: %v", keys(got))
+	}
+}
+
+func TestApplyUsers_NoCreateHome(t *testing.T) {
+	tarPath := baseAccountTar(t)
+	if err := wsl.ApplyUsers(tarPath, []wsl.UserEntry{{Name: "carol", NoCreateHome: true}}); err != nil {
+		t.Fatalf("ApplyUsers: %v", err)
+	}
+	got := readTar(t, tarPath)
+	if _, ok := got["home/carol/"]; ok {
+		t.Fatalf("home/carol/ should not have been created with NoCreateHome=true")
+	}
+	if findPasswdLine(got["etc/passwd"].body, "carol") == nil {
+		t.Fatal("carol should still be in /etc/passwd")
+	}
+}
+
+func TestApplyUsers_DuplicateUIDRejected(t *testing.T) {
+	tarPath := baseAccountTar(t)
+	// uid 1 is already used by 'bin' in the seed tar.
+	err := wsl.ApplyUsers(tarPath, []wsl.UserEntry{{Name: "dave", UID: 1}})
+	if err == nil {
+		t.Fatal("expected error when uid collides with existing user")
+	}
+}
+
+func TestApplyUsers_DuplicateNameRejected(t *testing.T) {
+	tarPath := baseAccountTar(t)
+	err := wsl.ApplyUsers(tarPath, []wsl.UserEntry{{Name: "root"}})
+	if err == nil {
+		t.Fatal("expected error when user name already exists in /etc/passwd")
+	}
+}
+
+func TestApplyUsers_DuplicateNameInInputRejected(t *testing.T) {
+	tarPath := baseAccountTar(t)
+	err := wsl.ApplyUsers(tarPath, []wsl.UserEntry{{Name: "eve"}, {Name: "eve"}})
+	if err == nil {
+		t.Fatal("expected error when the same user is listed twice")
+	}
+}
+
+func TestApplyUsers_EmptyNameRejected(t *testing.T) {
+	tarPath := baseAccountTar(t)
+	err := wsl.ApplyUsers(tarPath, []wsl.UserEntry{{Name: "  "}})
+	if err == nil {
+		t.Fatal("expected error for blank user name")
+	}
+}
+
+func TestApplyUsers_EmptyIsNoop(t *testing.T) {
+	tarPath := baseAccountTar(t)
+	before := readTar(t, tarPath)
+	if err := wsl.ApplyUsers(tarPath, nil); err != nil {
+		t.Fatal(err)
+	}
+	after := readTar(t, tarPath)
+	if len(before) != len(after) {
+		t.Fatalf("nil users should be a no-op (entry count %d -> %d)", len(before), len(after))
+	}
+}
+
+func TestApplyUsers_MultipleAutoAllocatesDistinct(t *testing.T) {
+	tarPath := baseAccountTar(t)
+	err := wsl.ApplyUsers(tarPath, []wsl.UserEntry{{Name: "u1"}, {Name: "u2"}, {Name: "u3"}})
+	if err != nil {
+		t.Fatalf("ApplyUsers: %v", err)
+	}
+	got := readTar(t, tarPath)
+	uids := []int{}
+	for _, n := range []string{"u1", "u2", "u3"} {
+		pw := findPasswdLine(got["etc/passwd"].body, n)
+		if pw == nil {
+			t.Fatalf("%s missing", n)
+		}
+		uids = append(uids, atoi(t, pw[2]))
+	}
+	sort.Ints(uids)
+	for i := 0; i < len(uids)-1; i++ {
+		if uids[i] == uids[i+1] {
+			t.Fatalf("duplicate auto-allocated uid: %v", uids)
+		}
+	}
+	if uids[0] < 1000 {
+		t.Fatalf("expected auto uids >= 1000, got %v", uids)
+	}
+}
+
+func TestApplyUsers_CreatesAccountFilesWhenMissing(t *testing.T) {
+	// Minimal tar with no /etc/{passwd,shadow,group} at all (some scratch
+	// images look like this). ApplyUsers should still produce a working
+	// account triple.
+	dir := t.TempDir()
+	tarPath := filepath.Join(dir, "rootfs.tar")
+	writeTar(t, tarPath, []tarEntry{
+		{hdr: tar.Header{Name: "bin/sh", Mode: 0o755, Typeflag: tar.TypeReg}, body: []byte("\x7fELF")},
+	})
+
+	if err := wsl.ApplyUsers(tarPath, []wsl.UserEntry{{Name: "solo", UID: 1000}}); err != nil {
+		t.Fatalf("ApplyUsers: %v", err)
+	}
+	got := readTar(t, tarPath)
+	for _, p := range []string{"etc/passwd", "etc/shadow", "etc/group"} {
+		if _, ok := got[p]; !ok {
+			t.Fatalf("expected %s to be created; entries: %v", p, keys(got))
+		}
+	}
+	if findPasswdLine(got["etc/passwd"].body, "solo") == nil {
+		t.Fatalf("solo missing from synthesised /etc/passwd: %q", got["etc/passwd"].body)
+	}
+	if findGroupLine(got["etc/group"].body, "solo") == nil {
+		t.Fatalf("solo primary group missing: %q", got["etc/group"].body)
+	}
+}
+
+func TestApplyUsers_PreservesOriginalHeaderMode(t *testing.T) {
+	// The substituted /etc/passwd should keep its original mode, not be
+	// silently rewritten with our default.
+	dir := t.TempDir()
+	tarPath := filepath.Join(dir, "rootfs.tar")
+	writeTar(t, tarPath, []tarEntry{
+		{hdr: tar.Header{Name: "etc/passwd", Mode: 0o600, Typeflag: tar.TypeReg},
+			body: []byte("root:x:0:0::/root:/bin/sh\n")},
+	})
+	if err := wsl.ApplyUsers(tarPath, []wsl.UserEntry{{Name: "x"}}); err != nil {
+		t.Fatal(err)
+	}
+	got := readTar(t, tarPath)
+	if got["etc/passwd"].hdr.Mode != 0o600 {
+		t.Fatalf("expected /etc/passwd mode 0600 to be preserved, got %o", got["etc/passwd"].hdr.Mode)
+	}
+}
+
+// --- small local helpers ---
+
+func contains(haystack []string, needle string) bool {
+	for _, h := range haystack {
+		if h == needle {
+			return true
+		}
+	}
+	return false
+}
+
+func keys(m map[string]tarEntry) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func atoi(t *testing.T, s string) int {
+	t.Helper()
+	n := 0
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			t.Fatalf("not numeric: %q", s)
+		}
+		n = n*10 + int(r-'0')
+	}
+	return n
+}

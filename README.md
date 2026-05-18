@@ -96,6 +96,16 @@ copies:                          # optional – injected into the rootfs tar so 
 deletes:                         # optional – absolute POSIX paths dropped from the rootfs tar before import
   - /var/cache/apt               # directories are removed recursively; applied before `copies`
   - /etc/motd
+users:                           # optional – Linux users created by editing /etc/passwd, /etc/shadow, /etc/group
+  - name: alice                  # required; must not already exist in the image
+    uid: 1000                    # optional; auto-allocated from 1000+ when omitted
+    gid: 1000                    # optional; defaults to uid (matching primary group created on demand)
+    home: /home/alice            # optional; defaults to /home/<name>
+    shell: /bin/bash             # optional; defaults to /bin/sh
+    gecos: "Alice Example"       # optional comment / full name
+    groups: [sudo, wheel]        # optional; supplementary groups (missing groups silently skipped)
+    password_hash: "$6$..."      # optional; written verbatim into /etc/shadow (e.g. `openssl passwd -6`)
+    no_create_home: false        # optional; when true, suppresses the home directory tar entry
 init_cmds:                       # optional – run inside the new distro after import
   - apt-get update -y
   - apt-get install -y curl git
