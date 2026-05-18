@@ -1,16 +1,21 @@
 // Package wsl provides helpers for managing WSL (Windows Subsystem for Linux) distributions.
+//
+// It is a thin wrapper around github.com/ubuntu/gowsl, which talks to the
+// native WslApi.dll Win32 surface (and falls back to wsl.exe internally for
+// the few operations that have no API equivalent). Using the API avoids the
+// UTF-16 LE output that wsl.exe produces by default, so callers do not need
+// to set WSL_UTF8=1 in their environment for output to be readable.
 package wsl
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
-	"runtime"
-	"strings"
 	"time"
 
 	"github.com/schollz/progressbar/v3"
+	gowsl "github.com/ubuntu/gowsl"
 )
 
 // ImportOptions controls how a WSL distribution is created.
@@ -25,28 +30,21 @@ type ImportOptions struct {
 	RootfsTar string
 }
 
-// Import creates a new WSL distribution by calling "wsl.exe --import".
-// This is Windows-only; on non-Windows hosts wsl.exe cannot be located and
-// findWSL returns an error indicating WSL is unavailable on this OS.
+// Import creates a new WSL distribution from a rootfs tar.
+//
+// On non-Windows hosts the underlying gowsl backend returns an error,
+// matching the previous behaviour of the manual wsl.exe wrapper.
 func Import(opts ImportOptions) error {
-	wslPath, err := findWSL()
-	if err != nil {
-		return err
-	}
+	ctx := context.Background()
 
-	args := []string{"--import", opts.Name, opts.InstallDir, opts.RootfsTar}
 	slog.Info("creating WSL distribution",
 		"name", opts.Name,
 		"install_dir", opts.InstallDir,
 		"rootfs_tar", opts.RootfsTar,
 	)
-	slog.Debug("executing wsl.exe", "path", wslPath, "args", args)
 	start := time.Now()
-	cmd := exec.Command(wslPath, args...) //nolint:gosec
-	cmd.Stdout = nil
-	cmd.Stderr = nil
 
-	// Spinner while wsl.exe runs (it gives no native progress output).
+	// Spinner while the import runs (gowsl/wsl.exe gives no progress output).
 	spinner := progressbar.NewOptions(-1,
 		progressbar.OptionSetDescription("Importing into WSL"),
 		progressbar.OptionSpinnerType(14),
@@ -68,72 +66,36 @@ func Import(opts ImportOptions) error {
 		}
 	}()
 
-	out, err := cmd.CombinedOutput()
+	_, err := gowsl.Import(ctx, opts.Name, opts.RootfsTar, opts.InstallDir)
 	close(done)
 	_ = spinner.Close()
-	slog.Debug("wsl.exe --import finished",
-		"duration", time.Since(start),
-		"exit_code", exitCode(cmd),
-		"output_bytes", len(out),
-	)
-	if len(out) > 0 {
-		fmt.Println(strings.TrimSpace(string(out)))
-	}
+	slog.Debug("wsl import finished", "duration", time.Since(start))
 	if err != nil {
-		return fmt.Errorf("wsl --import failed: %w\n%s", err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("wsl import failed: %w", err)
 	}
 	return nil
 }
 
 // RunCommand executes a shell command inside an existing WSL distribution.
+//
+// stdout/stderr of the in-distro process are streamed to the parent process's
+// stdout/stderr. Because gowsl uses WslLaunch under the hood, the output is
+// whatever bytes the Linux program writes (typically UTF-8) — there is no
+// UTF-16 transcoding step as there is with `wsl.exe` on its own.
 func RunCommand(distro, command string) error {
-	wslPath, err := findWSL()
-	if err != nil {
-		return err
-	}
+	ctx := context.Background()
 
-	args := []string{"--distribution", distro, "--", "sh", "-c", command}
-	slog.Info("running init command in WSL distribution", "distro", distro, "command", command)
-	slog.Debug("executing wsl.exe", "path", wslPath, "args", args)
+	slog.Info("running command in WSL distribution", "distro", distro, "command", command)
 	start := time.Now()
-	cmd := exec.Command(wslPath, args...) //nolint:gosec
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	out, err := cmd.CombinedOutput()
-	slog.Debug("wsl.exe command finished",
-		"distro", distro,
-		"duration", time.Since(start),
-		"exit_code", exitCode(cmd),
-		"output_bytes", len(out),
-	)
-	fmt.Print(string(out))
+
+	d := gowsl.NewDistro(ctx, distro)
+	cmd := d.Command(ctx, command)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	err := cmd.Run()
+	slog.Debug("wsl command finished", "distro", distro, "duration", time.Since(start))
 	if err != nil {
 		return fmt.Errorf("command %q failed in %q: %w", command, distro, err)
 	}
 	return nil
-}
-
-// findWSL locates wsl.exe; it must be available on the PATH or at the standard Windows location.
-func findWSL() (string, error) {
-	if path, err := exec.LookPath("wsl.exe"); err == nil {
-		slog.Debug("found wsl.exe on PATH", "path", path)
-		return path, nil
-	}
-	// Fall back to the well-known system location on Windows.
-	const winPath = `C:\Windows\System32\wsl.exe`
-	if fi, err := os.Stat(winPath); err == nil && !fi.IsDir() {
-		slog.Debug("found wsl.exe at system location", "path", winPath)
-		return winPath, nil
-	}
-	return "", fmt.Errorf("wsl.exe not found on %s; ensure you are running on Windows with WSL installed", runtime.GOOS)
-}
-
-// exitCode returns cmd.ProcessState.ExitCode() if available, or -1 when the
-// process never started (e.g. exec lookup failure), avoiding a nil-pointer
-// dereference in log fields.
-func exitCode(cmd *exec.Cmd) int {
-	if cmd == nil || cmd.ProcessState == nil {
-		return -1
-	}
-	return cmd.ProcessState.ExitCode()
 }
