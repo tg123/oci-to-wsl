@@ -14,7 +14,10 @@ jobs:
     runs-on: windows-latest
     env:
       # Force wsl.exe to emit UTF-8 instead of UTF-16 LE so output captured
-      # by the Go test runner is decodable as plain UTF-8.
+      # by the Go test runner (which shells out to wsl.exe directly in
+      # e2e_test.go) is decodable as plain UTF-8. The oci-to-wsl binary
+      # itself sets WSL_UTF8=1 inline on its own wsl.exe invocations
+      # (see wsl/wsl.go), so end users do not need this variable.
       WSL_UTF8: "1"
     steps:
       - name: Checkout repository

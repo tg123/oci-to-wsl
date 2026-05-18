@@ -43,6 +43,7 @@ func Import(opts ImportOptions) error {
 	slog.Debug("executing wsl.exe", "path", wslPath, "args", args)
 	start := time.Now()
 	cmd := exec.Command(wslPath, args...) //nolint:gosec
+	cmd.Env = wslEnv(os.Environ())
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 
@@ -97,6 +98,7 @@ func RunCommand(distro, command string) error {
 	slog.Debug("executing wsl.exe", "path", wslPath, "args", args)
 	start := time.Now()
 	cmd := exec.Command(wslPath, args...) //nolint:gosec
+	cmd.Env = wslEnv(os.Environ())
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	out, err := cmd.CombinedOutput()
@@ -111,6 +113,29 @@ func RunCommand(distro, command string) error {
 		return fmt.Errorf("command %q failed in %q: %w", command, distro, err)
 	}
 	return nil
+}
+
+// wslEnv returns a copy of env with WSL_UTF8=1 forced so that wsl.exe emits
+// UTF-8 output instead of its default UTF-16 LE. Any existing WSL_UTF8 entry
+// (regardless of value) is replaced. This guarantees the parent process can
+// decode wsl.exe stdout/stderr as plain UTF-8 without requiring the end user
+// to set WSL_UTF8 in their environment.
+func wslEnv(env []string) []string {
+	const key = "WSL_UTF8"
+	out := make([]string, 0, len(env)+1)
+	for _, kv := range env {
+		// Match "WSL_UTF8" or "WSL_UTF8=..." exactly (case-sensitive: Windows
+		// env names are case-insensitive at lookup time, but Go preserves the
+		// original casing in os.Environ; wsl.exe reads WSL_UTF8 in uppercase
+		// and Windows resolves either casing to the same variable).
+		if strings.EqualFold(kv, key) ||
+			(len(kv) > len(key) && kv[len(key)] == '=' && strings.EqualFold(kv[:len(key)], key)) {
+			continue
+		}
+		out = append(out, kv)
+	}
+	out = append(out, key+"=1")
+	return out
 }
 
 // findWSL locates wsl.exe; it must be available on the PATH or at the standard Windows location.
