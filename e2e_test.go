@@ -180,10 +180,12 @@ init_cmds:
 
 	for _, tc := range cases {
 		tc := tc
-		// Best-effort cleanup of leftovers from prior aborted runs before
-		// the test attempts to import the same distro name.
-		_, _ = runOutput("wsl.exe", "--unregister", tc.distro)
 		t.Run(tc.name, func(t *testing.T) {
+			// Best-effort cleanup of leftovers from prior aborted runs
+			// before the test attempts to import the same distro name.
+			// Done inside t.Run so a `-run` filter that excludes this
+			// case also skips its cleanup.
+			_, _ = runOutput("wsl.exe", "--unregister", tc.distro)
 			workDir := t.TempDir()
 			// Always try to unregister at the end - the case may have
 			// failed mid-import and left a partial registration behind.

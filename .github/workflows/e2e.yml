@@ -37,12 +37,6 @@ jobs:
           CGO_ENABLED: 0
         run: go build -trimpath -o oci-to-wsl.exe .
 
-      - name: Show WSL status
-        shell: pwsh
-        run: |
-          wsl.exe --status
-          wsl.exe --version
-
       - name: Run end-to-end test suite
         shell: pwsh
         env:
@@ -70,9 +64,6 @@ jobs:
         env:
           CGO_ENABLED: 0
         run: go build -trimpath -o oci-to-wsl .
-
-      - name: Show docker status
-        run: docker version
 
       - name: Run end-to-end test suite
         env:

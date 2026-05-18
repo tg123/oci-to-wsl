@@ -24,9 +24,9 @@ import (
 
 // TestE2EDockerDaemon exercises the docker-daemon image source by:
 //
-//  1. Pulling alpine:latest from the public registry and tagging it with a
-//     name that does NOT exist on any registry so a registry fallback
-//     would deterministically fail.
+//  1. Pulling alpine:latest from the public registry and tagging it under
+//     an unreachable registry host so a forced registry fallback
+//     deterministically fails.
 //  2. Running `oci-to-wsl --image <local-only> --save-tar <file>` and
 //     verifying the resulting rootfs tar looks like an Alpine rootfs
 //     (contains a non-empty etc/alpine-release).
@@ -44,16 +44,24 @@ func TestE2EDockerDaemon(t *testing.T) {
 		t.Skipf("docker not found on PATH: %v", err)
 	}
 
-	bin := ociToWSLBinary(t)
-
-	// Sanity-check the daemon is reachable before we do anything else.
+	// Sanity-check the daemon is reachable before we do anything else
+	// (including looking up the oci-to-wsl binary), so a host with the
+	// docker CLI but no reachable daemon takes the skip path instead of
+	// failing on a missing OCI_TO_WSL_BIN.
 	if out, err := runOutput("docker", "version"); err != nil {
 		t.Skipf("docker daemon not reachable: %v\n%s", err, out)
 	}
 
+	bin := ociToWSLBinary(t)
+
 	const (
 		baseImage = "alpine:latest"
-		localOnly = "oci-to-wsl-e2e/local-only:notpublished"
+		// Tag the local image under an unreachable registry host so the
+		// forced-registry path (OCI_TO_WSL_NO_LOCAL=1) deterministically
+		// fails instead of accidentally resolving against Docker Hub.
+		// Port 1 is reserved/unassigned and refuses connections, so a
+		// registry pull of this ref cannot succeed.
+		localOnly = "localhost:1/oci-to-wsl-e2e/local-only:notpublished"
 		alpineRel = "etc/alpine-release"
 	)
 
@@ -149,6 +157,9 @@ func assertAlpineRootfsTar(t *testing.T, path, marker string) {
 		name := strings.TrimPrefix(strings.ReplaceAll(hdr.Name, "\\", "/"), "./")
 		if name != marker {
 			continue
+		}
+		if hdr.Typeflag != tar.TypeReg && hdr.Typeflag != tar.TypeRegA {
+			t.Fatalf("%s in %s is not a regular file (typeflag=%d)", marker, path, hdr.Typeflag)
 		}
 		body, err := io.ReadAll(tr)
 		if err != nil {
