@@ -14,7 +14,6 @@ import (
 	"golang.org/x/term"
 
 	"github.com/tg123/oci-to-wsl/config"
-	"github.com/tg123/oci-to-wsl/logging"
 	"github.com/tg123/oci-to-wsl/registry"
 	"github.com/tg123/oci-to-wsl/wsl"
 )
@@ -68,7 +67,7 @@ Examples:
 			},
 			&cli.StringFlag{
 				Name:  "loglevel",
-				Value: logging.DefaultLevel,
+				Value: "info",
 				Usage: "logging verbosity: debug, info, warn, or error",
 			},
 		},
@@ -84,9 +83,20 @@ Examples:
 }
 
 func setupLogging(ctx context.Context, cmd *cli.Command) (context.Context, error) {
-	if err := logging.Setup(cmd.String("loglevel")); err != nil {
-		return ctx, err
+	var lvl slog.Level
+	switch strings.ToLower(strings.TrimSpace(cmd.String("loglevel"))) {
+	case "", "info":
+		lvl = slog.LevelInfo
+	case "debug":
+		lvl = slog.LevelDebug
+	case "warn", "warning":
+		lvl = slog.LevelWarn
+	case "error":
+		lvl = slog.LevelError
+	default:
+		return ctx, fmt.Errorf("invalid --loglevel %q (expected one of: debug, info, warn, error)", cmd.String("loglevel"))
 	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: lvl})))
 	return ctx, nil
 }
 
