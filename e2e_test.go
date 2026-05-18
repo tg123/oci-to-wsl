@@ -177,6 +177,7 @@ init_cmds:
 			},
 		},
 		{
+		{
 			name:   "profile_users",
 			distro: "e2e-users",
 			setup: func(t *testing.T, workDir string) []string {
