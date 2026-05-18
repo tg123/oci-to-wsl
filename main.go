@@ -74,11 +74,6 @@ Examples:
 				Value: "info",
 				Usage: "logging verbosity: debug, info, warn, or error",
 			},
-			&cli.StringFlag{
-				Name:  "loglevel",
-				Value: "info",
-				Usage: "logging verbosity: debug, info, warn, or error",
-			},
 		},
 		Before:   setupLogging,
 		Action:   action,
