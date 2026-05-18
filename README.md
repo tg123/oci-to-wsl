@@ -8,7 +8,7 @@ Load an OCI container-registry image directly into a **Windows Subsystem for Lin
 2. Run it from PowerShell:
 
 ```powershell
-# From Docker Hub
+# From Docker Hub (or, if already present, the local Docker daemon)
 oci-to-wsl.exe --image ubuntu:22.04 --name my-ubuntu
 
 # From Azure Container Registry (browser login opens automatically)
@@ -16,6 +16,37 @@ oci-to-wsl.exe --image myacr.azurecr.io/myimage:latest --name myimage
 
 # Using a YAML profile
 oci-to-wsl.exe --profile ubuntu.yaml
+```
+
+## Image sources
+
+`oci-to-wsl` first looks up the requested image in the local Docker daemon
+(discovered via `DOCKER_HOST` / the default socket). When the image is found
+locally it is exported from the daemon directly, avoiding a registry round-trip.
+Otherwise the image is pulled from its OCI registry as usual.
+
+Set `OCI_TO_WSL_NO_LOCAL=1` (also accepts `true`/`True`/`TRUE`/`t`) to skip the
+local lookup and always go to the registry:
+
+```powershell
+$env:OCI_TO_WSL_NO_LOCAL = '1'
+oci-to-wsl.exe --image ubuntu:22.04 --name my-ubuntu
+```
+
+## Cross-platform tars (save-tar mode)
+
+When importing into WSL the image platform is always the host's: importing an
+arm rootfs into an x86 WSL (or vice versa) does not work, so there is no CLI
+flag for it.
+
+In `--save-tar` mode you can override the platform via the
+`OCI_TO_WSL_PLATFORM` environment variable (format `os/arch`, e.g.
+`linux/arm64`, `windows/amd64`). The variable is ignored outside save-tar
+mode.
+
+```powershell
+$env:OCI_TO_WSL_PLATFORM = 'linux/arm64'
+oci-to-wsl.exe --image ubuntu:22.04 --save-tar ubuntu-arm64.tar
 ```
 
 ## Logging in to a private registry (no docker CLI required)

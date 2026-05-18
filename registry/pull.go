@@ -34,23 +34,48 @@ type PullOptions struct {
 
 // PullToTar pulls the OCI image identified by imageRef and writes the flattened
 // rootfs tar to w.  The flattened tar is suitable for use with "wsl --import".
+//
+// If the image is already present in a supported local container engine (the
+// local Docker daemon) it is loaded from there instead of being pulled from
+// the remote registry. Set OCI_TO_WSL_NO_LOCAL=1 to disable the local-engine
+// lookup and always go to the registry (the value is parsed with
+// strconv.ParseBool, so any of its accepted truthy spellings work). The
+// local-engine lookup is also skipped when opts.Platform is non-empty, since
+// the local daemon only holds whatever platform was last pulled for the tag
+// and would silently produce a tar for the wrong arch.
 func PullToTar(imageRef string, w io.Writer, opts PullOptions) error {
-	ref, err := name.ParseReference(imageRef)
-	if err != nil {
-		return fmt.Errorf("parsing image reference %q: %w", imageRef, err)
-	}
-
 	platform, err := resolvePlatform(opts.Platform)
 	if err != nil {
 		return err
 	}
 
-	pullOpts := buildCraneOptions(ref, platform, opts)
+	// Skip the local-daemon probe when a specific platform was requested:
+	// the daemon stores one image per tag and we cannot guarantee it
+	// matches opts.Platform, so fall straight through to the registry pull
+	// (which honours crane.WithPlatform).
+	var (
+		img   v1.Image
+		found bool
+	)
+	if opts.Platform == "" {
+		img, found, err = loadFromLocal(imageRef)
+		if err != nil {
+			return err
+		}
+	}
+	if !found {
+		ref, err := name.ParseReference(imageRef)
+		if err != nil {
+			return fmt.Errorf("parsing image reference %q: %w", imageRef, err)
+		}
 
-	fmt.Printf("Pulling image %s (%s/%s) ...\n", ref, platform.OS, platform.Architecture)
-	img, err := crane.Pull(imageRef, pullOpts...)
-	if err != nil {
-		return fmt.Errorf("pulling image %q: %w", imageRef, err)
+		pullOpts := buildCraneOptions(ref, platform, opts)
+
+		fmt.Printf("Pulling image %s (%s/%s) ...\n", ref, platform.OS, platform.Architecture)
+		img, err = crane.Pull(imageRef, pullOpts...)
+		if err != nil {
+			return fmt.Errorf("pulling image %q: %w", imageRef, err)
+		}
 	}
 
 	// crane.Export writes uncompressed tar bytes to w. Image manifests only

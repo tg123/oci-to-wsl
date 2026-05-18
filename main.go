@@ -24,8 +24,12 @@ func main() {
 		Description: `Pull an OCI image from any container registry and import it as a
 WSL distribution in one command.
 
+If the image already exists in the local Docker daemon it is loaded from there
+instead of being pulled from the registry. Set OCI_TO_WSL_NO_LOCAL=1 to disable
+this and always pull from the registry.
+
 Examples:
-  # Import directly from Docker Hub
+  # Import directly from Docker Hub (uses the local docker daemon if present)
   oci-to-wsl --image ubuntu:22.04 --name my-ubuntu
 
   # Import from Azure Container Registry (browser login triggered automatically)
@@ -33,6 +37,9 @@ Examples:
 
   # Use a YAML profile
   oci-to-wsl --profile ubuntu.yaml
+
+  # Save the rootfs tar for a non-host platform (save-tar mode only)
+  OCI_TO_WSL_PLATFORM=linux/arm64 oci-to-wsl --image ubuntu:22.04 --save-tar ubuntu-arm64.tar
 
   # Record registry credentials in ~/.docker/config.json without needing docker
   oci-to-wsl dockerlogin ghcr.io --username alice`,
@@ -54,12 +61,8 @@ Examples:
 				Usage: "directory to store the WSL virtual disk (default: ./<name>)",
 			},
 			&cli.StringFlag{
-				Name:  "platform",
-				Usage: "image platform to pull, e.g. linux/amd64 or linux/arm64 (default: host)",
-			},
-			&cli.StringFlag{
 				Name:  "save-tar",
-				Usage: "write the exported rootfs tar to this path and skip 'wsl --import' (useful on non-Windows hosts)",
+				Usage: "write the exported rootfs tar to this path and skip 'wsl --import' (useful on non-Windows hosts). Set OCI_TO_WSL_PLATFORM=os/arch (e.g. linux/arm64) to override the image platform; this is only honored in save-tar mode.",
 			},
 		},
 		Action:   action,
@@ -77,7 +80,6 @@ func action(_ context.Context, cmd *cli.Command) error {
 	imageName := cmd.String("image")
 	distroName := cmd.String("name")
 	installDir := cmd.String("dir")
-	platform := cmd.String("platform")
 	saveTar := cmd.String("save-tar")
 
 	// Build a Profile from the YAML file or the CLI flags.
@@ -101,7 +103,6 @@ func action(_ context.Context, cmd *cli.Command) error {
 			Name:       distroName,
 			Image:      imageName,
 			InstallDir: installDir,
-			Platform:   platform,
 		}
 	}
 
@@ -115,9 +116,6 @@ func action(_ context.Context, cmd *cli.Command) error {
 	}
 	if cmd.IsSet("dir") {
 		profile.InstallDir = installDir
-	}
-	if cmd.IsSet("platform") {
-		profile.Platform = platform
 	}
 
 	return loadProfile(profile, saveTar)
@@ -161,8 +159,17 @@ func loadProfile(profile *config.Profile, saveTar string) error {
 		}
 	}()
 
+	// The image platform can only be overridden in save-tar mode (via the
+	// OCI_TO_WSL_PLATFORM env var). In WSL-import mode the platform is
+	// always the host's: importing an arm rootfs into an x86 WSL (or vice
+	// versa) does not work.
+	var platform string
+	if saveTar != "" {
+		platform = os.Getenv("OCI_TO_WSL_PLATFORM")
+	}
+
 	if err := registry.PullToTar(profile.Image, tarFile, registry.PullOptions{
-		Platform: profile.Platform,
+		Platform: platform,
 	}); err != nil {
 		return fmt.Errorf("pulling image: %w", err)
 	}
