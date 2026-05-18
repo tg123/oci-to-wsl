@@ -294,6 +294,15 @@ func TestApplyUsers_CreatesAccountFilesWhenMissing(t *testing.T) {
 			t.Fatalf("expected %s to be created; entries: %v", p, keys(got))
 		}
 	}
+	for _, p := range []string{"etc/", "home/", "home/solo/"} {
+		e, ok := got[p]
+		if !ok {
+			t.Fatalf("expected %s directory entry to be created; entries: %v", p, keys(got))
+		}
+		if e.hdr.Typeflag != tar.TypeDir {
+			t.Fatalf("expected %s to be a directory entry, got type %v", p, e.hdr.Typeflag)
+		}
+	}
 	if findPasswdLine(got["etc/passwd"].body, "solo") == nil {
 		t.Fatalf("solo missing from synthesised /etc/passwd: %q", got["etc/passwd"].body)
 	}
