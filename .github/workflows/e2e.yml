@@ -169,7 +169,12 @@ jobs:
         run: |
           $contents = wsl.exe -d e2e-copy --user root --exec /bin/cat /usr/local/bin/bootstrap.sh
           if ($LASTEXITCODE -ne 0) { throw "cat bootstrap.sh failed" }
-          if ($contents -notmatch 'bootstrap-ran') { throw "bootstrap.sh content unexpected: $contents" }
+          # wsl.exe returns a string[] for multi-line output; PowerShell's
+          # -notmatch on an array is a filter (returns non-matching items),
+          # which is truthy whenever ANY line lacks the pattern. Join first
+          # so we test the full content as a single string.
+          $contentsStr = ($contents | Out-String)
+          if ($contentsStr -notmatch 'bootstrap-ran') { throw "bootstrap.sh content unexpected: $contentsStr" }
 
           $mode = wsl.exe -d e2e-copy --user root -- sh -c "stat -c '%a' /usr/local/bin/bootstrap.sh"
           if ($LASTEXITCODE -ne 0) { throw "stat bootstrap.sh failed" }
@@ -182,11 +187,13 @@ jobs:
         run: |
           $hello = wsl.exe -d e2e-copy --user root --exec /bin/cat /opt/assets/hello.txt
           if ($LASTEXITCODE -ne 0) { throw "cat hello.txt failed" }
-          if ($hello -notmatch 'hello-from-host') { throw "hello.txt content unexpected: $hello" }
+          $helloStr = ($hello | Out-String)
+          if ($helloStr -notmatch 'hello-from-host') { throw "hello.txt content unexpected: $helloStr" }
 
           $inner = wsl.exe -d e2e-copy --user root --exec /bin/cat /opt/assets/nested/inner.txt
           if ($LASTEXITCODE -ne 0) { throw "cat inner.txt failed" }
-          if ($inner -notmatch 'nested-from-host') { throw "inner.txt content unexpected: $inner" }
+          $innerStr = ($inner | Out-String)
+          if ($innerStr -notmatch 'nested-from-host') { throw "inner.txt content unexpected: $innerStr" }
 
           $dirMode = wsl.exe -d e2e-copy --user root -- sh -c "stat -c '%a' /opt/assets"
           $dirMode = ($dirMode | Out-String).Trim()
@@ -203,10 +210,12 @@ jobs:
         run: |
           $marker = wsl.exe -d e2e-copy --user root --exec /bin/cat /tmp/bootstrap-marker
           if ($LASTEXITCODE -ne 0) { throw "bootstrap-marker missing - init_cmds did not run after copy" }
-          if ($marker -notmatch 'bootstrap-ran') { throw "bootstrap-marker content unexpected: $marker" }
+          $markerStr = ($marker | Out-String)
+          if ($markerStr -notmatch 'bootstrap-ran') { throw "bootstrap-marker content unexpected: $markerStr" }
 
           $assetsHello = wsl.exe -d e2e-copy --user root --exec /bin/cat /tmp/assets-hello
-          if ($assetsHello -notmatch 'hello-from-host') { throw "init script could not read copied asset: $assetsHello" }
+          $assetsHelloStr = ($assetsHello | Out-String)
+          if ($assetsHelloStr -notmatch 'hello-from-host') { throw "init script could not read copied asset: $assetsHelloStr" }
 
       - name: Tear down the test distribution
         if: always()

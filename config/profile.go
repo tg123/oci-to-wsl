@@ -91,7 +91,16 @@ func LoadProfile(path string) (*Profile, error) {
 			continue
 		}
 		src = ExpandHostPath(src)
-		if !filepath.IsAbs(src) {
+		switch {
+		case filepath.IsAbs(src):
+			// Native-absolute (e.g. drive-letter path on Windows, "/..."
+			// on POSIX). Normalize separators but otherwise leave alone.
+			src = filepath.Clean(src)
+		case strings.HasPrefix(src, "/") || strings.HasPrefix(src, `\`):
+			// POSIX-absolute path on a Windows host: treat as already
+			// absolute so behavior is consistent across platforms (do
+			// not prefix with the profile dir).
+		default:
 			src = filepath.Join(baseDir, src)
 		}
 		p.Copies[i].Src = src
