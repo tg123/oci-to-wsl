@@ -41,6 +41,7 @@ func Import(opts ImportOptions) error {
 		"rootfs_tar", opts.RootfsTar,
 	)
 	slog.Debug("executing wsl.exe", "path", wslPath, "args", args)
+	start := time.Now()
 	cmd := exec.Command(wslPath, args...) //nolint:gosec
 	cmd.Stdout = nil
 	cmd.Stderr = nil
@@ -70,6 +71,11 @@ func Import(opts ImportOptions) error {
 	out, err := cmd.CombinedOutput()
 	close(done)
 	_ = spinner.Close()
+	slog.Debug("wsl.exe --import finished",
+		"duration", time.Since(start),
+		"exit_code", cmd.ProcessState.ExitCode(),
+		"output_bytes", len(out),
+	)
 	if len(out) > 0 {
 		fmt.Println(strings.TrimSpace(string(out)))
 	}
@@ -89,10 +95,17 @@ func RunCommand(distro, command string) error {
 	args := []string{"--distribution", distro, "--", "sh", "-c", command}
 	slog.Info("running init command in WSL distribution", "distro", distro, "command", command)
 	slog.Debug("executing wsl.exe", "path", wslPath, "args", args)
+	start := time.Now()
 	cmd := exec.Command(wslPath, args...) //nolint:gosec
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	out, err := cmd.CombinedOutput()
+	slog.Debug("wsl.exe command finished",
+		"distro", distro,
+		"duration", time.Since(start),
+		"exit_code", cmd.ProcessState.ExitCode(),
+		"output_bytes", len(out),
+	)
 	fmt.Print(string(out))
 	if err != nil {
 		return fmt.Errorf("command %q failed in %q: %w", command, distro, err)
@@ -103,11 +116,13 @@ func RunCommand(distro, command string) error {
 // findWSL locates wsl.exe; it must be available on the PATH or at the standard Windows location.
 func findWSL() (string, error) {
 	if path, err := exec.LookPath("wsl.exe"); err == nil {
+		slog.Debug("found wsl.exe on PATH", "path", path)
 		return path, nil
 	}
 	// Fall back to the well-known system location on Windows.
 	const winPath = `C:\Windows\System32\wsl.exe`
 	if fi, err := os.Stat(winPath); err == nil && !fi.IsDir() {
+		slog.Debug("found wsl.exe at system location", "path", winPath)
 		return winPath, nil
 	}
 	return "", fmt.Errorf("wsl.exe not found on %s; ensure you are running on Windows with WSL installed", runtime.GOOS)
