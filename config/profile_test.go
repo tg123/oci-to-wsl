@@ -216,7 +216,9 @@ func TestLoadProfile_WslConfExpandsEnvVars(t *testing.T) {
 }
 
 func TestLoadProfile_WslConfPreservesUnknownVars(t *testing.T) {
-	os.Unsetenv("OCI_TO_WSL_TEST_MISSING")
+	if err := os.Unsetenv("OCI_TO_WSL_TEST_MISSING"); err != nil {
+		t.Fatalf("unsetenv: %v", err)
+	}
 	yaml := "name: n\nimage: i\nwsl_conf:\n  content: |\n    [user]\n    default=$OCI_TO_WSL_TEST_MISSING\n"
 	p := writeAndLoad(t, yaml)
 	if p.WslConf == nil || !strings.Contains(p.WslConf.Content, "${OCI_TO_WSL_TEST_MISSING}") {
