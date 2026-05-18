@@ -67,6 +67,32 @@ type Profile struct {
 
 	// InitCmds is a list of shell commands to run inside the new WSL instance after it is created.
 	InitCmds []string `yaml:"init_cmds"`
+
+	// WslConf, when set, writes /etc/wsl.conf into the rootfs tar before
+	// `wsl --import` runs. It is syntactic sugar over `copies`/`deletes`
+	// that additionally understands the wsl.conf INI format: with Mode
+	// "merge" (the default) it merges the user-supplied content with any
+	// existing /etc/wsl.conf in the image section- and key-wise; with Mode
+	// "replace" it discards any existing /etc/wsl.conf and writes Content
+	// verbatim.
+	WslConf *WslConfEntry `yaml:"wsl_conf"`
+}
+
+// WslConfEntry describes how to materialise /etc/wsl.conf in the rootfs tar.
+type WslConfEntry struct {
+	// Mode is either "merge" (default) or "replace". Merge combines
+	// Content with any existing /etc/wsl.conf in the image, with user
+	// keys overriding existing keys; replace overwrites it outright.
+	Mode string `yaml:"mode"`
+
+	// Content is the wsl.conf body in standard INI format, e.g.:
+	//
+	//   [boot]
+	//   systemd=true
+	//
+	//   [user]
+	//   default=alice
+	Content string `yaml:"content"`
 }
 
 // LoadProfile reads a YAML profile from the given file path.

@@ -96,6 +96,13 @@ copies:                          # optional – injected into the rootfs tar so 
 deletes:                         # optional – absolute POSIX paths dropped from the rootfs tar before import
   - /var/cache/apt               # directories are removed recursively; applied before `copies`
   - /etc/motd
+wsl_conf:                        # optional – syntactic sugar for writing /etc/wsl.conf
+  mode: merge                    # "merge" (default) merges with any existing /etc/wsl.conf; "replace" overwrites
+  content: |
+    [boot]
+    systemd=true
+    [user]
+    default=alice
 init_cmds:                       # optional – run inside the new distro after import
   - apt-get update -y
   - apt-get install -y curl git
