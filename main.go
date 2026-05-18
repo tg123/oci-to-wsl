@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/urfave/cli/v3"
@@ -43,6 +44,9 @@ Examples:
   # Save the rootfs tar for a non-host platform (save-tar mode only)
   OCI_TO_WSL_PLATFORM=linux/arm64 oci-to-wsl --image ubuntu:22.04 --save-tar ubuntu-arm64.tar
 
+  # Save the rootfs tar without applying the profile's 'copies' / 'deletes'
+  OCI_TO_WSL_NO_TAR_MODS=1 oci-to-wsl --profile ubuntu.yaml --save-tar ubuntu.tar
+
   # Record registry credentials in ~/.docker/config.json without needing docker
   oci-to-wsl dockerlogin ghcr.io --username alice`,
 		Flags: []cli.Flag{
@@ -64,7 +68,7 @@ Examples:
 			},
 			&cli.StringFlag{
 				Name:  "save-tar",
-				Usage: "write the exported rootfs tar to this path and skip 'wsl --import' (useful on non-Windows hosts). Set OCI_TO_WSL_PLATFORM=os/arch (e.g. linux/arm64) to override the image platform; this is only honored in save-tar mode.",
+				Usage: "write the exported rootfs tar to this path and skip 'wsl --import' (useful on non-Windows hosts). Profile 'copies' and 'deletes' are still applied to the tar; set OCI_TO_WSL_NO_TAR_MODS=1 to skip them. Set OCI_TO_WSL_PLATFORM=os/arch (e.g. linux/arm64) to override the image platform; this is only honored in save-tar mode.",
 			},
 			&cli.StringFlag{
 				Name:  "loglevel",
@@ -209,13 +213,26 @@ func loadProfile(profile *config.Profile, saveTar string) error {
 	// `replace: true` (the default) implicitly contribute their Dst to
 	// this delete list, so a staged file fully replaces whatever the
 	// upstream image had at the same path rather than overlaying onto it.
+	//
+	// These tar modifications run in both WSL-import and --save-tar
+	// modes. Set OCI_TO_WSL_NO_TAR_MODS=1 to skip them and obtain the
+	// rootfs tar exactly as exported from the image (most useful with
+	// --save-tar when you want an unmodified artifact).
 	deletes := append([]string(nil), profile.Deletes...)
 	for _, f := range profile.Files {
 		if f.Dst != "" && f.ReplaceEnabled() {
 			deletes = append(deletes, f.Dst)
 		}
 	}
-	if len(deletes) > 0 {
+	skipTarMods := isTarModsDisabled()
+	if skipTarMods && (len(deletes) > 0 || len(profile.Files) > 0) {
+		// Print directly to stderr so this notice is not suppressed
+		// by --loglevel error; it reflects a user-requested
+		// behavioural change that should always be visible.
+		fmt.Fprintf(os.Stderr, "OCI_TO_WSL_NO_TAR_MODS is set; skipping profile 'deletes' (%d) and 'files' (%d) tar modifications\n",
+			len(deletes), len(profile.Files))
+	}
+	if !skipTarMods && len(deletes) > 0 {
 		slog.Debug("applying profile deletes", "count", len(deletes))
 		if err := wsl.ApplyDeletes(tarPath, deletes); err != nil {
 			return fmt.Errorf("applying deletes to rootfs tar: %w", err)
@@ -226,7 +243,7 @@ func loadProfile(profile *config.Profile, saveTar string) error {
 	// they are present in the distribution as soon as wsl.exe --import
 	// finishes, before any init_cmds run. This avoids any dependency on a
 	// tar binary inside the container.
-	if len(profile.Files) > 0 {
+	if !skipTarMods && len(profile.Files) > 0 {
 		slog.Debug("staging profile files into rootfs tar", "count", len(profile.Files))
 		injects := make([]wsl.CopyEntry, 0, len(profile.Files))
 		for _, f := range profile.Files {
@@ -302,6 +319,21 @@ func fileEntryToCopy(f config.FileEntry) (wsl.CopyEntry, error) {
 	default:
 		return wsl.CopyEntry{}, fmt.Errorf("profile files: %q: no source set (call Profile.Validate first)", f.Dst)
 	}
+}
+
+// envDisableTarMods, when set to a value parseable as true by strconv.ParseBool
+// (e.g. "1", "t", "true", "True", "TRUE"), skips the profile-driven tar
+// modifications (`deletes` and `files`) so the rootfs tar is left exactly
+// as exported from the image. Most useful in --save-tar mode when an
+// unmodified artifact is desired.
+const envDisableTarMods = "OCI_TO_WSL_NO_TAR_MODS"
+
+func isTarModsDisabled() bool {
+	v, err := strconv.ParseBool(os.Getenv(envDisableTarMods))
+	if err != nil {
+		return false
+	}
+	return v
 }
 
 // dockerLoginCommand defines the `dockerlogin` subcommand. It mirrors a
