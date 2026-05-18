@@ -295,12 +295,12 @@ wsl_conf:
 			},
 			verifies: []verify{
 				{name: "wsl_conf_exists", script: "test -s /etc/wsl.conf && echo ok", want: "ok"},
-				{name: "env_var_expanded", script: "cat /etc/wsl.conf", wantSub: "default=alice"},
+				{name: "env_var_expanded", script: "cat /etc/wsl.conf | tr -d ' '", wantSub: "default=alice"},
 				{name: "no_unexpanded_token", script: "grep -c WSL_CONF_E2E_USER /etc/wsl.conf || true", want: "0"},
 				{name: "boot_section", script: "cat /etc/wsl.conf", wantSub: "[boot]"},
-				{name: "systemd_false", script: "cat /etc/wsl.conf", wantSub: "systemd=false"},
+				{name: "systemd_false", script: "cat /etc/wsl.conf | tr -d ' '", wantSub: "systemd=false"},
 				{name: "interop_section", script: "cat /etc/wsl.conf", wantSub: "[interop]"},
-				{name: "append_windows_path", script: "cat /etc/wsl.conf", wantSub: "appendWindowsPath=false"},
+				{name: "append_windows_path", script: "cat /etc/wsl.conf | tr -d ' '", wantSub: "appendWindowsPath=false"},
 			},
 		},
 		{
