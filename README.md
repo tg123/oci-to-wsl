@@ -91,6 +91,7 @@ copies:                          # optional – injected into the rootfs tar so 
     mode: "0755"                 # optional – octal, e.g. "0755" or "777"
   - src: C:\Users\me\assets      # native Windows paths are accepted
     dst: /opt/assets
+    replace: false               # optional – default true; false overlays onto the upstream tree instead of replacing it
   - src: '%USERPROFILE%\.gitconfig'  # %VAR%, $VAR / ${VAR} and a leading ~ are expanded
     dst: /root/.gitconfig
 deletes:                         # optional – absolute POSIX paths dropped from the rootfs tar before import

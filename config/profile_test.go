@@ -186,6 +186,38 @@ func TestExpandHostPath_TildeAndUnknownVars(t *testing.T) {
 	}
 }
 
+func TestLoadProfile_CopiesReplaceDefaultAndExplicit(t *testing.T) {
+	yaml := `
+name: replace-distro
+image: alpine:latest
+copies:
+  - src: /a
+    dst: /etc/a
+  - src: /b
+    dst: /etc/b
+    replace: true
+  - src: /c
+    dst: /etc/c
+    replace: false
+`
+	p := writeAndLoad(t, yaml)
+	if len(p.Copies) != 3 {
+		t.Fatalf("Copies length: got %d, want 3", len(p.Copies))
+	}
+	if p.Copies[0].Replace != nil {
+		t.Errorf("Copies[0].Replace (omitted): got non-nil pointer, want nil")
+	}
+	if !p.Copies[0].ReplaceEnabled() {
+		t.Errorf("Copies[0].ReplaceEnabled (omitted): got false, want true (default)")
+	}
+	if !p.Copies[1].ReplaceEnabled() {
+		t.Errorf("Copies[1].ReplaceEnabled (explicit true): got false, want true")
+	}
+	if p.Copies[2].ReplaceEnabled() {
+		t.Errorf("Copies[2].ReplaceEnabled (explicit false): got true, want false")
+	}
+}
+
 // writeAndLoad writes yaml content to a temp file and calls LoadProfile.
 func writeAndLoad(t *testing.T, yamlContent string) *config.Profile {
 	t.Helper()

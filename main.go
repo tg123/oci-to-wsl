@@ -177,9 +177,18 @@ func loadProfile(profile *config.Profile, saveTar string) error {
 
 	// Apply any profile-driven deletions before staging copies, so a
 	// profile can drop an upstream directory and then place its own
-	// replacement at the same destination.
-	if len(profile.Deletes) > 0 {
-		if err := wsl.ApplyDeletes(tarPath, profile.Deletes); err != nil {
+	// replacement at the same destination. Copy entries with
+	// `replace: true` (the default) implicitly contribute their Dst to
+	// this delete list, so a copy fully replaces whatever the upstream
+	// image had at the same path rather than overlaying onto it.
+	deletes := append([]string(nil), profile.Deletes...)
+	for _, c := range profile.Copies {
+		if c.Dst != "" && c.ReplaceEnabled() {
+			deletes = append(deletes, c.Dst)
+		}
+	}
+	if len(deletes) > 0 {
+		if err := wsl.ApplyDeletes(tarPath, deletes); err != nil {
 			return fmt.Errorf("applying deletes to rootfs tar: %w", err)
 		}
 	}

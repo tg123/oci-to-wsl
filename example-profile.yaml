@@ -23,6 +23,10 @@ install_dir: C:\WSL\my-ubuntu
 # must be an absolute POSIX path (start with '/'). 'mode' is optional and is
 # baked into the tar header (no chmod step runs inside the distribution);
 # for a directory source it applies recursively to all regular files.
+# 'replace' is optional and defaults to true: any existing entry at 'dst' in
+# the upstream rootfs tar is dropped before the copy is staged (for a
+# directory 'dst' the whole subtree is removed). Set 'replace: false' to
+# overlay onto the existing tree instead.
 copies:
   - src: ./scripts/bootstrap.sh
     dst: /usr/local/bin/bootstrap.sh
@@ -30,6 +34,7 @@ copies:
   - src: C:\Users\me\assets
     dst: /opt/assets
     mode: "0777"
+    replace: false               # overlay onto the existing /opt/assets instead of replacing it
   - src: '%USERPROFILE%\.ssh\id_rsa.pub'
     dst: /root/.ssh/authorized_keys
     mode: "0600"

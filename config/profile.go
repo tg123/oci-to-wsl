@@ -36,6 +36,27 @@ type CopyEntry struct {
 	// the mode is applied to the directory and every regular file written
 	// under Dst (i.e. effectively recursive).
 	Mode string `yaml:"mode"`
+
+	// Replace, when true (the default when omitted), causes any existing
+	// entry at Dst in the upstream rootfs tar to be dropped before this
+	// copy is staged — equivalent to listing Dst in the top-level
+	// `deletes`. For a directory Dst the entire subtree is removed
+	// recursively, so the copied tree fully replaces the upstream one
+	// rather than overlaying onto it. Set to false to overlay instead
+	// (i.e. keep upstream files that the copy does not itself overwrite).
+	// Use a pointer so an absent value is distinguishable from explicit
+	// `false` and can therefore default to true.
+	Replace *bool `yaml:"replace,omitempty"`
+}
+
+// ReplaceEnabled reports whether this entry's Dst should replace (i.e. be
+// deleted from the upstream rootfs tar before injection). The default when
+// Replace is unset is true.
+func (e CopyEntry) ReplaceEnabled() bool {
+	if e.Replace == nil {
+		return true
+	}
+	return *e.Replace
 }
 
 // Profile describes a WSL instance to create from an OCI image.
