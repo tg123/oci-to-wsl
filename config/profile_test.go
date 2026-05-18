@@ -3,6 +3,7 @@ package config_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tg123/oci-to-wsl/config"
@@ -199,4 +200,36 @@ func writeAndLoad(t *testing.T, yamlContent string) *config.Profile {
 		t.Fatalf("LoadProfile: unexpected error: %v", err)
 	}
 	return p
+}
+
+func TestLoadProfile_WslConfExpandsEnvVars(t *testing.T) {
+	t.Setenv("OCI_TO_WSL_TEST_USER", "alice")
+	yaml := "name: n\nimage: i\nwsl_conf:\n  mode: replace\n  content: |\n    [user]\n    default=$OCI_TO_WSL_TEST_USER\n    home=%OCI_TO_WSL_TEST_USER%\n"
+	p := writeAndLoad(t, yaml)
+	if p.WslConf == nil {
+		t.Fatal("WslConf nil")
+	}
+	want := "[user]\ndefault=alice\nhome=alice\n"
+	if p.WslConf.Content != want {
+		t.Fatalf("Content = %q, want %q", p.WslConf.Content, want)
+	}
+}
+
+func TestLoadProfile_WslConfPreservesUnknownVars(t *testing.T) {
+	os.Unsetenv("OCI_TO_WSL_TEST_MISSING")
+	yaml := "name: n\nimage: i\nwsl_conf:\n  content: |\n    [user]\n    default=$OCI_TO_WSL_TEST_MISSING\n"
+	p := writeAndLoad(t, yaml)
+	if p.WslConf == nil || !strings.Contains(p.WslConf.Content, "${OCI_TO_WSL_TEST_MISSING}") {
+		t.Fatalf("missing var should be preserved as ${...}, got %q", p.WslConf.Content)
+	}
+}
+
+func contains(s, sub string) bool { return len(s) >= len(sub) && (s == sub || (len(sub) > 0 && indexOf(s, sub) >= 0)) }
+func indexOf(s, sub string) int {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return i
+		}
+	}
+	return -1
 }

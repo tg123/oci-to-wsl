@@ -131,6 +131,13 @@ func LoadProfile(path string) (*Profile, error) {
 		}
 		p.Copies[i].Src = src
 	}
+
+	// Expand environment variables in wsl_conf content so users can write
+	// e.g. `default=$USER` or `default=%USERNAME%` and have it resolved at
+	// profile-load time on the host.
+	if p.WslConf != nil && p.WslConf.Content != "" {
+		p.WslConf.Content = ExpandEnvVars(p.WslConf.Content)
+	}
 	return &p, nil
 }
 
@@ -151,23 +158,7 @@ func ExpandHostPath(p string) string {
 		return p
 	}
 
-	// Expand %NAME% (Windows). Leave unknown vars untouched.
-	p = winEnvVarRE.ReplaceAllStringFunc(p, func(m string) string {
-		name := m[1 : len(m)-1]
-		if v, ok := os.LookupEnv(name); ok {
-			return v
-		}
-		return m
-	})
-
-	// Expand $NAME / ${NAME} (POSIX). os.Expand returns "" for missing vars;
-	// preserve the original token instead.
-	p = os.Expand(p, func(name string) string {
-		if v, ok := os.LookupEnv(name); ok {
-			return v
-		}
-		return "${" + name + "}"
-	})
+	p = ExpandEnvVars(p)
 
 	// Expand a leading ~ or ~/ (or ~\ on Windows) to the user's home dir.
 	if p == "~" || strings.HasPrefix(p, "~/") || strings.HasPrefix(p, `~\`) {
@@ -181,4 +172,38 @@ func ExpandHostPath(p string) string {
 	}
 
 	return p
+}
+
+// ExpandEnvVars expands environment variable references in s without doing
+// any path-specific processing. It supports:
+//   - Windows %NAME% references (e.g. %USERPROFILE%, %APPDATA%)
+//   - POSIX $NAME / ${NAME} references
+//
+// Unknown variables are left as-is (Windows tokens stay %FOO%; POSIX tokens
+// are rewritten to ${FOO}) so a missing variable surfaces as an obvious
+// unexpanded token rather than silently expanding to an empty string.
+func ExpandEnvVars(s string) string {
+	if s == "" {
+		return s
+	}
+
+	// Expand %NAME% (Windows). Leave unknown vars untouched.
+	s = winEnvVarRE.ReplaceAllStringFunc(s, func(m string) string {
+		name := m[1 : len(m)-1]
+		if v, ok := os.LookupEnv(name); ok {
+			return v
+		}
+		return m
+	})
+
+	// Expand $NAME / ${NAME} (POSIX). os.Expand returns "" for missing vars;
+	// preserve the original token instead.
+	s = os.Expand(s, func(name string) string {
+		if v, ok := os.LookupEnv(name); ok {
+			return v
+		}
+		return "${" + name + "}"
+	})
+
+	return s
 }

@@ -63,7 +63,9 @@ wsl_conf:
     systemd=true
 
     [user]
-    default=alice
+    # %VAR%, $VAR and ${VAR} are expanded against the host's environment
+    # at profile-load time (unknown variables are left as-is).
+    default=%USERNAME%
 
     [interop]
     appendWindowsPath=false

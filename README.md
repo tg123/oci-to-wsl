@@ -98,11 +98,11 @@ deletes:                         # optional – absolute POSIX paths dropped fro
   - /etc/motd
 wsl_conf:                        # optional – syntactic sugar for writing /etc/wsl.conf
   mode: merge                    # "merge" (default) merges with any existing /etc/wsl.conf; "replace" overwrites
-  content: |
+  content: |                     # %VAR%, $VAR and ${VAR} are expanded against the host environment
     [boot]
     systemd=true
     [user]
-    default=alice
+    default=%USERNAME%
 init_cmds:                       # optional – run inside the new distro after import
   - apt-get update -y
   - apt-get install -y curl git
