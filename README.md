@@ -118,6 +118,20 @@ users:                           # optional – Linux users created by editing /
     password_hash: "$6$..."      # optional; written verbatim into /etc/shadow (e.g. `openssl passwd -6`)
     password_plain: "s3cret!"    # optional; hashed with SHA-512 crypt before write (mutually exclusive with password_hash)
     no_create_home: false        # optional; when true, suppresses the home directory tar entry
+wsl_conf:                        # optional – syntactic sugar for writing /etc/wsl.conf
+  mode: merge                    # "merge" (default) merges with any existing /etc/wsl.conf; "replace" overwrites
+  content: |                     # raw INI string – %VAR%, $VAR and ${VAR} are expanded against the host environment
+    [boot]
+    systemd=true
+    [user]
+    default=%USERNAME%
+  # `content` also accepts a YAML mapping of sections, which is rendered to
+  # the same INI body (env-var expansion still applies):
+  # content:
+  #   boot:
+  #     systemd: true
+  #   user:
+  #     default: "%USERNAME%"
 init_cmds:                       # optional – run inside the new distro after import
   - apt-get update -y
   - apt-get install -y curl git
