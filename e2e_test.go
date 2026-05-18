@@ -20,82 +20,28 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
 	"testing"
 )
 
-// binaryCache memoises the built (or overridden) oci-to-wsl binary path
-// across subtests so we only pay the build cost once per `go test` run.
-// On a successful build we also remember the temp directory to clean up
-// when the test process exits. A failed build does NOT poison the cache:
-// the next caller retries from scratch, which matters if more entry
-// points are ever added to this suite.
-type binaryCache struct {
-	mu      sync.Mutex
-	path    string
-	tempDir string // non-empty only when we built the binary ourselves
-}
-
-var binCache binaryCache
-
-// buildBinary returns the absolute path to oci-to-wsl(.exe). If
-// OCI_TO_WSL_BIN is set it is used verbatim; otherwise the binary is
-// built into a temp dir that is removed when the test process exits.
-// On error the cache is left untouched so subsequent callers can retry.
-func buildBinary(t *testing.T) string {
+// ociToWSLBinary returns the absolute path to the oci-to-wsl binary that
+// the e2e suite should exercise. The caller is responsible for building
+// the binary and exporting its path via OCI_TO_WSL_BIN before invoking
+// `go test -tags=e2e` — this keeps the test runner narrowly focused on
+// exercising the binary rather than building it.
+func ociToWSLBinary(t *testing.T) string {
 	t.Helper()
-	binCache.mu.Lock()
-	defer binCache.mu.Unlock()
-
-	if binCache.path != "" {
-		return binCache.path
+	override := os.Getenv("OCI_TO_WSL_BIN")
+	if override == "" {
+		t.Fatal("OCI_TO_WSL_BIN must be set to the absolute path of a prebuilt oci-to-wsl binary")
 	}
-
-	if override := os.Getenv("OCI_TO_WSL_BIN"); override != "" {
-		abs, err := filepath.Abs(override)
-		if err != nil {
-			t.Fatalf("resolving OCI_TO_WSL_BIN %q: %v", override, err)
-		}
-		if _, err := os.Stat(abs); err != nil {
-			t.Fatalf("OCI_TO_WSL_BIN %q: %v", abs, err)
-		}
-		binCache.path = abs
-		return binCache.path
-	}
-
-	dir, err := os.MkdirTemp("", "oci-to-wsl-e2e-bin-")
+	abs, err := filepath.Abs(override)
 	if err != nil {
-		t.Fatalf("mktemp for build: %v", err)
+		t.Fatalf("resolving OCI_TO_WSL_BIN %q: %v", override, err)
 	}
-	exe := "oci-to-wsl"
-	if runtime.GOOS == "windows" {
-		exe += ".exe"
+	if _, err := os.Stat(abs); err != nil {
+		t.Fatalf("OCI_TO_WSL_BIN %q: %v", abs, err)
 	}
-	out := filepath.Join(dir, exe)
-	cmd := exec.Command("go", "build", "-trimpath", "-o", out, ".")
-	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
-	if buildOut, err := cmd.CombinedOutput(); err != nil {
-		// Clean up the empty temp dir before bailing out so a transient
-		// build failure does not leak it, and leave the cache empty so a
-		// later caller can retry.
-		_ = os.RemoveAll(dir)
-		t.Fatalf("go build oci-to-wsl: %v\n%s", err, buildOut)
-	}
-	binCache.path = out
-	binCache.tempDir = dir
-	// Register cleanup on the test that triggered the build. Once
-	// registered it survives for the rest of the test process, which is
-	// what we want — later subtests still need the binary in place.
-	t.Cleanup(func() {
-		binCache.mu.Lock()
-		defer binCache.mu.Unlock()
-		if binCache.tempDir != "" {
-			_ = os.RemoveAll(binCache.tempDir)
-			binCache.tempDir = ""
-			binCache.path = ""
-		}
-	})
-	return binCache.path
+	return abs
 }
 
 // runOutput runs name with args and returns combined stdout+stderr along
@@ -147,7 +93,7 @@ func TestE2E(t *testing.T) {
 		t.Skipf("wsl.exe not found on PATH: %v", err)
 	}
 
-	bin := buildBinary(t)
+	bin := ociToWSLBinary(t)
 
 	cases := []e2eCase{
 		{

@@ -40,8 +40,9 @@ jobs:
       - name: Run end-to-end test suite
         shell: pwsh
         env:
-          # Point the e2e tests at the binary we just built instead of
-          # rebuilding it for every subtest.
+          # Point the e2e tests at the binary we just built. The test
+          # runner requires OCI_TO_WSL_BIN and does not build the binary
+          # itself.
           OCI_TO_WSL_BIN: ${{ github.workspace }}\oci-to-wsl.exe
         run: |
           go test -tags=e2e -timeout 30m -v -run TestE2E .
