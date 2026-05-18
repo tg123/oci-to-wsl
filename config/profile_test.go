@@ -73,12 +73,12 @@ func TestLoadProfile_InvalidYAML(t *testing.T) {
 	}
 }
 
-func TestLoadProfile_CopiesResolveRelativeSrc(t *testing.T) {
+func TestLoadProfile_FilesResolveRelativeSrc(t *testing.T) {
 	dir := t.TempDir()
 	yaml := `
 name: copy-distro
 image: alpine:latest
-copies:
+files:
   - src: ./scripts/bootstrap.sh
     dst: /usr/local/bin/bootstrap.sh
     mode: "0755"
@@ -96,36 +96,36 @@ copies:
 	if err != nil {
 		t.Fatalf("LoadProfile: %v", err)
 	}
-	if len(p.Copies) != 3 {
-		t.Fatalf("Copies length: got %d, want 3", len(p.Copies))
+	if len(p.Files) != 3 {
+		t.Fatalf("Files length: got %d, want 3", len(p.Files))
 	}
 
 	wantRel0 := filepath.Join(dir, "scripts", "bootstrap.sh")
-	if p.Copies[0].Src != wantRel0 {
-		t.Errorf("Copies[0].Src: got %q, want %q", p.Copies[0].Src, wantRel0)
+	if p.Files[0].Src != wantRel0 {
+		t.Errorf("Files[0].Src: got %q, want %q", p.Files[0].Src, wantRel0)
 	}
-	if p.Copies[0].Dst != "/usr/local/bin/bootstrap.sh" {
-		t.Errorf("Copies[0].Dst: got %q", p.Copies[0].Dst)
+	if p.Files[0].Dst != "/usr/local/bin/bootstrap.sh" {
+		t.Errorf("Files[0].Dst: got %q", p.Files[0].Dst)
 	}
-	if p.Copies[0].Mode != "0755" {
-		t.Errorf("Copies[0].Mode: got %q", p.Copies[0].Mode)
+	if p.Files[0].Mode != "0755" {
+		t.Errorf("Files[0].Mode: got %q", p.Files[0].Mode)
 	}
 
 	// Absolute paths must be left untouched.
-	if p.Copies[1].Src != "/absolute/path/file" {
-		t.Errorf("Copies[1].Src: got %q, want unchanged absolute path", p.Copies[1].Src)
+	if p.Files[1].Src != "/absolute/path/file" {
+		t.Errorf("Files[1].Src: got %q, want unchanged absolute path", p.Files[1].Src)
 	}
 
 	wantRel2 := filepath.Join(dir, "assets")
-	if p.Copies[2].Src != wantRel2 {
-		t.Errorf("Copies[2].Src: got %q, want %q", p.Copies[2].Src, wantRel2)
+	if p.Files[2].Src != wantRel2 {
+		t.Errorf("Files[2].Src: got %q, want %q", p.Files[2].Src, wantRel2)
 	}
-	if p.Copies[2].Mode != "777" {
-		t.Errorf("Copies[2].Mode: got %q", p.Copies[2].Mode)
+	if p.Files[2].Mode != "777" {
+		t.Errorf("Files[2].Mode: got %q", p.Files[2].Mode)
 	}
 }
 
-func TestLoadProfile_CopiesExpandWindowsEnv(t *testing.T) {
+func TestLoadProfile_FilesExpandWindowsEnv(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("OCI_TO_WSL_TEST_ROOT", dir)
 	t.Setenv("OCI_TO_WSL_TEST_NAME", "thing")
@@ -133,7 +133,7 @@ func TestLoadProfile_CopiesExpandWindowsEnv(t *testing.T) {
 	yaml := `
 name: env-distro
 image: alpine:latest
-copies:
+files:
   - src: '%OCI_TO_WSL_TEST_ROOT%/sub/%OCI_TO_WSL_TEST_NAME%.txt'
     dst: /tmp/win.txt
   - src: '$OCI_TO_WSL_TEST_ROOT/posix/${OCI_TO_WSL_TEST_NAME}.txt'
@@ -151,18 +151,18 @@ copies:
 	}
 
 	want0 := filepath.Join(dir, "sub", "thing.txt")
-	if p.Copies[0].Src != want0 {
-		t.Errorf("Copies[0].Src: got %q, want %q", p.Copies[0].Src, want0)
+	if p.Files[0].Src != want0 {
+		t.Errorf("Files[0].Src: got %q, want %q", p.Files[0].Src, want0)
 	}
 	want1 := filepath.Join(dir, "posix", "thing.txt")
-	if p.Copies[1].Src != want1 {
-		t.Errorf("Copies[1].Src: got %q, want %q", p.Copies[1].Src, want1)
+	if p.Files[1].Src != want1 {
+		t.Errorf("Files[1].Src: got %q, want %q", p.Files[1].Src, want1)
 	}
 	// Unknown %VAR% must be preserved (not silently expanded to empty),
 	// then resolved relative to the profile dir.
 	want2 := filepath.Join(dir, "%OCI_TO_WSL_TEST_UNSET_VAR%", "literal")
-	if p.Copies[2].Src != want2 {
-		t.Errorf("Copies[2].Src: got %q, want %q", p.Copies[2].Src, want2)
+	if p.Files[2].Src != want2 {
+		t.Errorf("Files[2].Src: got %q, want %q", p.Files[2].Src, want2)
 	}
 }
 
@@ -186,11 +186,11 @@ func TestExpandHostPath_TildeAndUnknownVars(t *testing.T) {
 	}
 }
 
-func TestLoadProfile_CopiesReplaceDefaultAndExplicit(t *testing.T) {
+func TestLoadProfile_FilesReplaceDefaultAndExplicit(t *testing.T) {
 	yaml := `
 name: replace-distro
 image: alpine:latest
-copies:
+files:
   - src: /a
     dst: /etc/a
   - src: /b
@@ -201,20 +201,20 @@ copies:
     replace: false
 `
 	p := writeAndLoad(t, yaml)
-	if len(p.Copies) != 3 {
-		t.Fatalf("Copies length: got %d, want 3", len(p.Copies))
+	if len(p.Files) != 3 {
+		t.Fatalf("Files length: got %d, want 3", len(p.Files))
 	}
-	if p.Copies[0].Replace != nil {
-		t.Errorf("Copies[0].Replace (omitted): got non-nil pointer, want nil")
+	if p.Files[0].Replace != nil {
+		t.Errorf("Files[0].Replace (omitted): got non-nil pointer, want nil")
 	}
-	if !p.Copies[0].ReplaceEnabled() {
-		t.Errorf("Copies[0].ReplaceEnabled (omitted): got false, want true (default)")
+	if !p.Files[0].ReplaceEnabled() {
+		t.Errorf("Files[0].ReplaceEnabled (omitted): got false, want true (default)")
 	}
-	if !p.Copies[1].ReplaceEnabled() {
-		t.Errorf("Copies[1].ReplaceEnabled (explicit true): got false, want true")
+	if !p.Files[1].ReplaceEnabled() {
+		t.Errorf("Files[1].ReplaceEnabled (explicit true): got false, want true")
 	}
-	if p.Copies[2].ReplaceEnabled() {
-		t.Errorf("Copies[2].ReplaceEnabled (explicit false): got true, want false")
+	if p.Files[2].ReplaceEnabled() {
+		t.Errorf("Files[2].ReplaceEnabled (explicit false): got true, want false")
 	}
 }
 

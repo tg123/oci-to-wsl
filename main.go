@@ -202,16 +202,16 @@ func loadProfile(profile *config.Profile, saveTar string) error {
 
 	slog.Debug("rootfs tar staged", "path", tarPath, "save_tar_mode", saveTar != "")
 
-	// Apply any profile-driven deletions before staging copies, so a
+	// Apply any profile-driven deletions before staging files, so a
 	// profile can drop an upstream directory and then place its own
-	// replacement at the same destination. Copy entries with
+	// replacement at the same destination. File entries with
 	// `replace: true` (the default) implicitly contribute their Dst to
-	// this delete list, so a copy fully replaces whatever the upstream
-	// image had at the same path rather than overlaying onto it.
+	// this delete list, so a staged file fully replaces whatever the
+	// upstream image had at the same path rather than overlaying onto it.
 	deletes := append([]string(nil), profile.Deletes...)
-	for _, c := range profile.Copies {
-		if c.Dst != "" && c.ReplaceEnabled() {
-			deletes = append(deletes, c.Dst)
+	for _, f := range profile.Files {
+		if f.Dst != "" && f.ReplaceEnabled() {
+			deletes = append(deletes, f.Dst)
 		}
 	}
 	if len(deletes) > 0 {
@@ -225,17 +225,17 @@ func loadProfile(profile *config.Profile, saveTar string) error {
 	// they are present in the distribution as soon as wsl.exe --import
 	// finishes, before any init_cmds run. This avoids any dependency on a
 	// tar binary inside the container.
-	if len(profile.Copies) > 0 {
-		slog.Debug("staging profile copies into rootfs tar", "count", len(profile.Copies))
-		injects := make([]wsl.CopyEntry, 0, len(profile.Copies))
-		for _, c := range profile.Copies {
-			if c.Src == "" || c.Dst == "" {
-				return fmt.Errorf("profile copies: both 'src' and 'dst' are required")
+	if len(profile.Files) > 0 {
+		slog.Debug("staging profile files into rootfs tar", "count", len(profile.Files))
+		injects := make([]wsl.CopyEntry, 0, len(profile.Files))
+		for _, f := range profile.Files {
+			if f.Src == "" || f.Dst == "" {
+				return fmt.Errorf("profile files: both 'src' and 'dst' are required")
 			}
-			injects = append(injects, wsl.CopyEntry{Src: c.Src, Dst: c.Dst, Mode: c.Mode})
+			injects = append(injects, wsl.CopyEntry{Src: f.Src, Dst: f.Dst, Mode: f.Mode})
 		}
 		if err := wsl.InjectCopies(tarPath, injects); err != nil {
-			return fmt.Errorf("staging copies into rootfs tar: %w", err)
+			return fmt.Errorf("staging files into rootfs tar: %w", err)
 		}
 	}
 

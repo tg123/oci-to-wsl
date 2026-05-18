@@ -27,7 +27,7 @@ install_dir: C:\WSL\my-ubuntu
 # the upstream rootfs tar is dropped before the copy is staged (for a
 # directory 'dst' the whole subtree is removed). Set 'replace: false' to
 # overlay onto the existing tree instead.
-copies:
+files:
   - src: ./scripts/bootstrap.sh
     dst: /usr/local/bin/bootstrap.sh
     mode: "0755"
@@ -42,7 +42,7 @@ copies:
 # Optional: absolute POSIX paths to remove from the rootfs tar before
 # `wsl --import` runs. Files and directories are both supported; directories
 # are removed recursively. Missing paths are silently ignored. Deletes are
-# applied before `copies`, so you can drop an upstream directory and stage
+# applied before `files`, so you can drop an upstream directory and stage
 # your own replacement at the same destination.
 deletes:
   - /var/cache/apt

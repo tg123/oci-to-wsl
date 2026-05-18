@@ -96,7 +96,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { Write-Host "unregister failed (non-fatal)" }
 
   e2e-wsl-copy-and-init:
-    name: Profile copies + init_cmds
+    name: Profile files + init_cmds
     runs-on: windows-latest
     env:
       WSL_UTF8: "1"
@@ -143,7 +143,7 @@ jobs:
           $profile = @'
           name: e2e-copy
           image: alpine:latest
-          copies:
+          files:
             - src: ./scripts/bootstrap.sh
               dst: /usr/local/bin/bootstrap.sh
               mode: "0755"
@@ -156,7 +156,7 @@ jobs:
           Set-Content -Path (Join-Path $work 'profile.yaml') -Value $profile
           Get-ChildItem -Recurse $work | Format-Table -AutoSize
 
-      - name: Import with profile (copies run before init_cmds)
+      - name: Import with profile (files staged before init_cmds)
         shell: pwsh
         run: |
           $work = Join-Path $PWD 'e2e-copy'
@@ -225,7 +225,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { Write-Host "unregister failed (non-fatal)" }
 
   e2e-wsl-copy-replace:
-    name: Profile copies[].replace semantics
+    name: Profile files[].replace semantics
     runs-on: windows-latest
     env:
       WSL_UTF8: "1"
@@ -270,7 +270,7 @@ jobs:
           $profileA = @'
           name: e2e-replace-default
           image: alpine:latest
-          copies:
+          files:
             - src: ./apk-replacement
               dst: /etc/apk
           '@
@@ -280,7 +280,7 @@ jobs:
           $profileB = @'
           name: e2e-replace-false
           image: alpine:latest
-          copies:
+          files:
             - src: ./apk-replacement
               dst: /etc/apk
               replace: false

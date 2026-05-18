@@ -10,11 +10,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// CopyEntry describes a single file or directory to copy from the host into
+// FileEntry describes a single file or directory to stage from the host into
 // the new WSL distribution. Entries are staged by appending them to the
 // rootfs tar before `wsl --import` runs, so the files are present on first
 // boot and available to init_cmds.
-type CopyEntry struct {
+type FileEntry struct {
 	// Src is the path on the host. May be a file, directory, or symlink.
 	// Windows-native paths (e.g. C:\Users\me\file), %VAR% / $VAR / ${VAR}
 	// environment variable references, and a leading ~ are expanded by
@@ -52,7 +52,7 @@ type CopyEntry struct {
 // ReplaceEnabled reports whether this entry's Dst should replace (i.e. be
 // deleted from the upstream rootfs tar before injection). The default when
 // Replace is unset is true.
-func (e CopyEntry) ReplaceEnabled() bool {
+func (e FileEntry) ReplaceEnabled() bool {
 	if e.Replace == nil {
 		return true
 	}
@@ -71,17 +71,17 @@ type Profile struct {
 	// Defaults to ".\<name>" relative to the current working directory.
 	InstallDir string `yaml:"install_dir"`
 
-	// Copies is a list of file/directory entries staged into the new WSL
+	// Files is a list of file/directory entries staged into the new WSL
 	// distribution by appending them to the rootfs tar before
 	// `wsl --import` runs, so they exist on first boot — and therefore
-	// before InitCmds, which can rely on the copied content.
-	Copies []CopyEntry `yaml:"copies"`
+	// before InitCmds, which can rely on the staged content.
+	Files []FileEntry `yaml:"files"`
 
 	// Deletes is a list of absolute POSIX paths inside the distribution
 	// to remove from the rootfs tar before `wsl --import` runs. Each
 	// path may name a file or a directory; directories are removed
 	// recursively (every entry under that prefix is dropped). Missing
-	// paths are silently ignored. Deletes are applied before Copies, so
+	// paths are silently ignored. Deletes are applied before Files, so
 	// a profile may delete an upstream directory and then stage its own
 	// replacement at the same destination.
 	Deletes []string `yaml:"deletes"`
@@ -101,13 +101,13 @@ func LoadProfile(path string) (*Profile, error) {
 		return nil, fmt.Errorf("parsing profile %q: %w", path, err)
 	}
 
-	// Resolve copy sources: expand Windows %VAR% / POSIX $VAR environment
+	// Resolve file sources: expand Windows %VAR% / POSIX $VAR environment
 	// references and a leading ~ for the user's home folder, then resolve
 	// remaining relative paths against the profile file's directory so
 	// profiles remain portable regardless of the caller's CWD.
 	baseDir := filepath.Dir(path)
-	for i := range p.Copies {
-		src := p.Copies[i].Src
+	for i := range p.Files {
+		src := p.Files[i].Src
 		if src == "" {
 			continue
 		}
@@ -124,7 +124,7 @@ func LoadProfile(path string) (*Profile, error) {
 		default:
 			src = filepath.Join(baseDir, src)
 		}
-		p.Copies[i].Src = src
+		p.Files[i].Src = src
 	}
 	return &p, nil
 }
