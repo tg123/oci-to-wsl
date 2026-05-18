@@ -5,6 +5,7 @@ import (
 	"archive/tar"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"runtime"
 	"strings"
@@ -49,6 +50,12 @@ func PullToTar(imageRef string, w io.Writer, opts PullOptions) error {
 		return err
 	}
 
+	slog.Debug("pull requested",
+		"image", imageRef,
+		"platform_request", opts.Platform,
+		"platform_resolved", fmt.Sprintf("%s/%s", platform.OS, platform.Architecture),
+	)
+
 	// Skip the local-daemon probe when a specific platform was requested:
 	// the daemon stores one image per tag and we cannot guarantee it
 	// matches opts.Platform, so fall straight through to the registry pull
@@ -62,6 +69,8 @@ func PullToTar(imageRef string, w io.Writer, opts PullOptions) error {
 		if err != nil {
 			return err
 		}
+	} else {
+		slog.Debug("skipping local docker daemon probe (explicit platform requested)", "platform", opts.Platform)
 	}
 	if !found {
 		ref, err := name.ParseReference(imageRef)
@@ -71,7 +80,11 @@ func PullToTar(imageRef string, w io.Writer, opts PullOptions) error {
 
 		pullOpts := buildCraneOptions(ref, platform, opts)
 
-		fmt.Printf("Pulling image %s (%s/%s) ...\n", ref, platform.OS, platform.Architecture)
+		slog.Info("pulling image from registry",
+			"image", ref.String(),
+			"os", platform.OS,
+			"arch", platform.Architecture,
+		)
 		img, err = crane.Pull(imageRef, pullOpts...)
 		if err != nil {
 			return fmt.Errorf("pulling image %q: %w", imageRef, err)
@@ -87,6 +100,11 @@ func PullToTar(imageRef string, w io.Writer, opts PullOptions) error {
 	if compressed > 0 {
 		estimatedTotal = compressed * uncompressedRatio
 	}
+
+	slog.Debug("estimated tar size",
+		"compressed_bytes", compressed,
+		"estimated_uncompressed_bytes", estimatedTotal,
+	)
 
 	desc := "Exporting rootfs "
 	if estimatedTotal > 0 {
@@ -160,6 +178,7 @@ func (w *safeBarWriter) Write(p []byte) (int, error) {
 func normalizeTarPaths(r io.Reader, w io.Writer) error {
 	tr := tar.NewReader(r)
 	tw := tar.NewWriter(w)
+	var entries, rewritten int
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
@@ -167,6 +186,10 @@ func normalizeTarPaths(r io.Reader, w io.Writer) error {
 		}
 		if err != nil {
 			return fmt.Errorf("reading tar entry: %w", err)
+		}
+		entries++
+		if strings.ContainsRune(hdr.Name, '\\') || strings.ContainsRune(hdr.Linkname, '\\') {
+			rewritten++
 		}
 		hdr.Name = strings.ReplaceAll(hdr.Name, `\`, "/")
 		if hdr.Linkname != "" {
@@ -181,7 +204,12 @@ func normalizeTarPaths(r io.Reader, w io.Writer) error {
 			}
 		}
 	}
-	return tw.Close()
+	if err := tw.Close(); err != nil {
+		slog.Debug("normalizing rootfs tar paths failed on close", "entries", entries, "rewritten", rewritten, "error", err)
+		return err
+	}
+	slog.Debug("normalized rootfs tar paths", "entries", entries, "rewritten", rewritten)
+	return nil
 }
 
 func humanBytes(n int64) string {
@@ -221,6 +249,7 @@ func buildCraneOptions(ref name.Reference, platform *v1.Platform, opts PullOptio
 	craneOpts := []crane.Option{crane.WithPlatform(platform)}
 
 	if opts.Authenticator != nil {
+		slog.Debug("using caller-provided authenticator", "registry", ref.Context().RegistryStr())
 		craneOpts = append(craneOpts, crane.WithAuth(opts.Authenticator))
 		return craneOpts
 	}
@@ -228,11 +257,11 @@ func buildCraneOptions(ref name.Reference, platform *v1.Platform, opts PullOptio
 	// Auto-detect ACR registries and use browser-based auth.
 	registry := ref.Context().RegistryStr()
 	if isACR(registry) {
-		fmt.Printf("Detected ACR registry %s – authenticating via Azure SDK ...\n", registry)
+		slog.Info("detected ACR registry, authenticating via Azure SDK", "registry", registry)
 		auth, err := NewACRAuthenticator(registry)
 		if err != nil {
 			// Fall through to default keychain; the error will surface during pull.
-			fmt.Printf("Warning: ACR browser auth failed: %v – falling back to keychain\n", err)
+			slog.Warn("ACR browser auth failed, falling back to docker keychain", "registry", registry, "error", err)
 		} else {
 			craneOpts = append(craneOpts, crane.WithAuth(auth))
 			return craneOpts
@@ -240,6 +269,7 @@ func buildCraneOptions(ref name.Reference, platform *v1.Platform, opts PullOptio
 	}
 
 	// Default: use the Docker credential keychain (config.json / env vars).
+	slog.Debug("using default docker keychain authenticator", "registry", registry)
 	craneOpts = append(craneOpts, crane.WithAuthFromKeychain(authn.DefaultKeychain))
 	return craneOpts
 }

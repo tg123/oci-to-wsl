@@ -3,6 +3,7 @@ package registry
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
@@ -46,21 +47,30 @@ func NewACRAuthenticator(registry string) (authn.Authenticator, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
+	slog.Debug("ACR auth: building Azure credential chain", "registry", registry)
 	cred, err := newAzureCredential()
 	if err != nil {
 		return nil, fmt.Errorf("building Azure credential: %w", err)
 	}
 
+	slog.Debug("ACR auth: acquiring AAD token", "scope", aadScope)
+	tokStart := time.Now()
 	aadToken, err := cred.GetToken(ctx, policy.TokenRequestOptions{Scopes: []string{aadScope}})
 	if err != nil {
 		return nil, fmt.Errorf("acquiring AAD token: %w", err)
 	}
+	slog.Debug("ACR auth: AAD token acquired",
+		"duration", time.Since(tokStart),
+		"expires_on", aadToken.ExpiresOn,
+	)
 
 	authClient, err := azcontainerregistry.NewAuthenticationClient("https://"+registry, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating ACR auth client: %w", err)
 	}
 
+	slog.Debug("ACR auth: exchanging AAD token for ACR refresh token", "registry", registry)
+	exchangeStart := time.Now()
 	exchangeOpts := &azcontainerregistry.AuthenticationClientExchangeAADAccessTokenForACRRefreshTokenOptions{
 		AccessToken: &aadToken.Token,
 	}
@@ -76,12 +86,16 @@ func NewACRAuthenticator(registry string) (authn.Authenticator, error) {
 	if refreshResp.RefreshToken == nil {
 		return nil, fmt.Errorf("ACR refresh token response was empty")
 	}
+	slog.Debug("ACR auth: ACR refresh token obtained", "duration", time.Since(exchangeStart))
 
+	const scope = "repository:*:pull"
+	slog.Debug("ACR auth: exchanging refresh token for access token", "registry", registry, "scope", scope)
+	accessStart := time.Now()
 	grant := azcontainerregistry.TokenGrantTypeRefreshToken
 	accessResp, err := authClient.ExchangeACRRefreshTokenForACRAccessToken(
 		ctx,
 		registry,
-		"repository:*:pull",
+		scope,
 		*refreshResp.RefreshToken,
 		&azcontainerregistry.AuthenticationClientExchangeACRRefreshTokenForACRAccessTokenOptions{
 			GrantType: &grant,
@@ -93,6 +107,7 @@ func NewACRAuthenticator(registry string) (authn.Authenticator, error) {
 	if accessResp.AccessToken == nil {
 		return nil, fmt.Errorf("ACR access token response was empty")
 	}
+	slog.Debug("ACR auth: ACR access token obtained", "duration", time.Since(accessStart))
 
 	return &acrAuthenticator{accessToken: *accessResp.AccessToken}, nil
 }
@@ -104,13 +119,17 @@ func newAzureCredential() (azcore.TokenCredential, error) {
 	var sources []azcore.TokenCredential
 
 	if cli, err := azidentity.NewAzureCLICredential(nil); err == nil {
+		slog.Debug("ACR auth: Azure CLI credential available")
 		sources = append(sources, cli)
+	} else {
+		slog.Debug("ACR auth: Azure CLI credential unavailable", "error", err)
 	}
 
 	browser, err := azidentity.NewInteractiveBrowserCredential(nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating interactive browser credential: %w", err)
 	}
+	slog.Debug("ACR auth: interactive browser credential added to chain")
 	sources = append(sources, browser)
 
 	return azidentity.NewChainedTokenCredential(sources, nil)
