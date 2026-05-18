@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -211,14 +212,26 @@ func ApplyWslConf(tarPath string, content string, mode WslConfMode) error {
 // the serialised merge: overlay sections/keys override base, but base
 // sections/keys that overlay does not mention are preserved in their
 // original order.
+//
+// If the image-shipped base is unparseable, mergeWslConf logs a warning
+// and falls back to overlay-only (replace-style) output so a malformed
+// upstream /etc/wsl.conf does not abort the import. A parse failure on
+// the user-supplied overlay is still returned as an error, since that
+// indicates a problem the user can fix in their profile.
 func mergeWslConf(base, overlay string) (string, error) {
-	bDoc, err := ini.Load([]byte(base))
-	if err != nil {
-		return "", fmt.Errorf("parse existing wsl.conf: %w", err)
-	}
 	oDoc, err := ini.Load([]byte(overlay))
 	if err != nil {
-		return "", fmt.Errorf("parse user wsl.conf: %w", err)
+		return "", fmt.Errorf("parse user-supplied wsl_conf content: %w", err)
+	}
+	bDoc, err := ini.Load([]byte(base))
+	if err != nil {
+		slog.Warn("existing /etc/wsl.conf in rootfs image is not valid INI; falling back to replace mode for wsl_conf merge",
+			"error", err)
+		var buf bytes.Buffer
+		if _, err := oDoc.WriteTo(&buf); err != nil {
+			return "", fmt.Errorf("serialise wsl.conf: %w", err)
+		}
+		return buf.String(), nil
 	}
 	for _, name := range oDoc.SectionStrings() {
 		oSec := oDoc.Section(name)

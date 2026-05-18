@@ -107,6 +107,54 @@ func TestApplyWslConf_MergeOverridesAndAdds(t *testing.T) {
 	}
 }
 
+func TestApplyWslConf_MergeFallsBackWhenBaseUnparseable(t *testing.T) {
+	dir := t.TempDir()
+	tarPath := filepath.Join(dir, "rootfs.tar")
+	// Section header missing closing bracket — gopkg.in/ini.v1 rejects this.
+	bad := "[boot\nsystemd=false\n"
+	writeTar(t, tarPath, []tarEntry{
+		{hdr: tar.Header{Name: "etc/", Mode: 0o755, Typeflag: tar.TypeDir}},
+		{hdr: tar.Header{Name: "etc/wsl.conf", Mode: 0o644, Typeflag: tar.TypeReg}, body: []byte(bad)},
+	})
+
+	overlay := "[boot]\nsystemd=true\n"
+	if err := wsl.ApplyWslConf(tarPath, overlay, wsl.WslConfModeMerge); err != nil {
+		t.Fatalf("expected fallback to succeed when base is unparseable, got: %v", err)
+	}
+
+	got := readTar(t, tarPath)
+	e, ok := got["etc/wsl.conf"]
+	if !ok {
+		t.Fatal("etc/wsl.conf missing")
+	}
+	body := string(e.body)
+	if !strings.Contains(body, "systemd = true") {
+		t.Fatalf("expected overlay to be written verbatim-style after fallback, got:\n%s", body)
+	}
+	if strings.Contains(body, "systemd=false") || strings.Contains(body, "systemd = false") {
+		t.Fatalf("unparseable base content should be discarded on fallback, got:\n%s", body)
+	}
+}
+
+func TestApplyWslConf_MergeRejectsUnparseableUserContent(t *testing.T) {
+	dir := t.TempDir()
+	tarPath := filepath.Join(dir, "rootfs.tar")
+	writeTar(t, tarPath, []tarEntry{
+		{hdr: tar.Header{Name: "etc/", Mode: 0o755, Typeflag: tar.TypeDir}},
+		{hdr: tar.Header{Name: "etc/wsl.conf", Mode: 0o644, Typeflag: tar.TypeReg}, body: []byte("[boot]\nsystemd=false\n")},
+	})
+
+	// Unclosed section header in user-supplied content.
+	overlay := "[boot\nsystemd=true\n"
+	err := wsl.ApplyWslConf(tarPath, overlay, wsl.WslConfModeMerge)
+	if err == nil {
+		t.Fatal("expected error for unparseable user-supplied wsl_conf content")
+	}
+	if !strings.Contains(err.Error(), "user-supplied") {
+		t.Fatalf("error should attribute the failure to user-supplied content, got: %v", err)
+	}
+}
+
 func TestApplyWslConf_MergeWithoutExistingActsLikeReplace(t *testing.T) {
 	dir := t.TempDir()
 	tarPath := filepath.Join(dir, "rootfs.tar")
