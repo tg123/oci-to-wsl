@@ -288,3 +288,84 @@ jobs:
           # should still work.
           ./oci-to-wsl --image alpine:latest --save-tar alpine-registry.tar
           test -s alpine-registry.tar
+
+  e2e-save-tar-no-tar-mods:
+    name: save-tar honours OCI_TO_WSL_NO_TAR_MODS
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: 'stable'
+          cache: true
+
+      - name: Build oci-to-wsl
+        env:
+          CGO_ENABLED: 0
+        run: go build -trimpath -o oci-to-wsl .
+
+      - name: Prepare profile with copies and deletes
+        run: |
+          mkdir -p e2e-no-tar-mods/assets
+          echo 'hello-from-host' > e2e-no-tar-mods/assets/marker.txt
+          cat > e2e-no-tar-mods/profile.yaml <<'YAML'
+          name: e2e-no-tar-mods
+          image: alpine:latest
+          copies:
+            - src: ./assets/marker.txt
+              dst: /opt/marker.txt
+              mode: "0644"
+          deletes:
+            - /etc/issue
+          YAML
+          cat e2e-no-tar-mods/profile.yaml
+
+      - name: Default --save-tar bakes copies and deletes into the tar
+        run: |
+          ./oci-to-wsl --profile e2e-no-tar-mods/profile.yaml --save-tar default.tar
+          test -s default.tar
+          # The copied marker file must be present.
+          if ! tar -tf default.tar | grep -qE '(^|/)opt/marker\.txt$'; then
+            echo "opt/marker.txt missing from default tar (copies were not applied)"
+            tar -tf default.tar | head -50
+            exit 1
+          fi
+          # The deleted /etc/issue must be absent.
+          if tar -tf default.tar | grep -qE '(^|/)etc/issue$'; then
+            echo "etc/issue still present in default tar (deletes were not applied)"
+            exit 1
+          fi
+          # Verify the content of the copied marker file.
+          mkdir default-rootfs
+          tar -xf default.tar -C default-rootfs ./opt/marker.txt 2>/dev/null || \
+            tar -xf default.tar -C default-rootfs opt/marker.txt
+          grep -q 'hello-from-host' default-rootfs/opt/marker.txt
+
+      - name: OCI_TO_WSL_NO_TAR_MODS=1 skips copies and deletes
+        env:
+          OCI_TO_WSL_NO_TAR_MODS: "1"
+        run: |
+          ./oci-to-wsl --profile e2e-no-tar-mods/profile.yaml --save-tar raw.tar 2> raw.stderr
+          test -s raw.tar
+          echo "--- stderr ---"
+          cat raw.stderr
+          # The skip notice must always be visible on stderr (it bypasses slog
+          # filtering on purpose).
+          if ! grep -q 'OCI_TO_WSL_NO_TAR_MODS is set' raw.stderr; then
+            echo "expected skip notice on stderr"
+            exit 1
+          fi
+          # The copied marker file must NOT be present.
+          if tar -tf raw.tar | grep -qE '(^|/)opt/marker\.txt$'; then
+            echo "opt/marker.txt unexpectedly present in raw tar (copies should be skipped)"
+            exit 1
+          fi
+          # The deleted /etc/issue must still be there.
+          if ! tar -tf raw.tar | grep -qE '(^|/)etc/issue$'; then
+            echo "etc/issue missing from raw tar (deletes should be skipped)"
+            tar -tf raw.tar | head -50
+            exit 1
+          fi
