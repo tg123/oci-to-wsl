@@ -8,6 +8,7 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/containers/azcontainerregistry v0.2.3
 	github.com/google/go-containerregistry v0.21.5
 	github.com/schollz/progressbar/v3 v3.19.0
+	github.com/ubuntu/gowsl v0.0.0-20251112191800-0ef2623cc8fb
 	github.com/urfave/cli/v3 v3.9.0
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -29,6 +30,7 @@ require (
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
+	github.com/ubuntu/decorate v0.0.0-20230125165522-2d5b0a9bb117 // indirect
 	github.com/vbatts/tar-split v0.12.2 // indirect
 	golang.org/x/crypto v0.50.0 // indirect
 	golang.org/x/net v0.53.0 // indirect
