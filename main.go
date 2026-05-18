@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"log/slog"
@@ -229,10 +230,11 @@ func loadProfile(profile *config.Profile, saveTar string) error {
 		slog.Debug("staging profile files into rootfs tar", "count", len(profile.Files))
 		injects := make([]wsl.CopyEntry, 0, len(profile.Files))
 		for _, f := range profile.Files {
-			if f.Src == "" || f.Dst == "" {
-				return fmt.Errorf("profile files: both 'src' and 'dst' are required")
+			ce, err := fileEntryToCopy(f)
+			if err != nil {
+				return err
 			}
-			injects = append(injects, wsl.CopyEntry{Src: f.Src, Dst: f.Dst, Mode: f.Mode})
+			injects = append(injects, ce)
 		}
 		if err := wsl.InjectCopies(tarPath, injects); err != nil {
 			return fmt.Errorf("staging files into rootfs tar: %w", err)
@@ -278,6 +280,43 @@ func loadProfile(profile *config.Profile, saveTar string) error {
 		fmt.Printf("Initialisation of %q complete.\n", profile.Name)
 	}
 	return nil
+}
+
+// fileEntryToCopy validates a profile FileEntry and translates it into the
+// wsl.CopyEntry form consumed by InjectCopies. Exactly one of `src`,
+// `content`, or `content_base64` must be set; `dst` is always required.
+func fileEntryToCopy(f config.FileEntry) (wsl.CopyEntry, error) {
+	if f.Dst == "" {
+		return wsl.CopyEntry{}, fmt.Errorf("profile files: 'dst' is required")
+	}
+	sources := 0
+	if f.Src != "" {
+		sources++
+	}
+	if f.Content != "" {
+		sources++
+	}
+	if f.ContentBase64 != "" {
+		sources++
+	}
+	if sources == 0 {
+		return wsl.CopyEntry{}, fmt.Errorf("profile files: %q: exactly one of 'src', 'content', or 'content_base64' is required", f.Dst)
+	}
+	if sources > 1 {
+		return wsl.CopyEntry{}, fmt.Errorf("profile files: %q: 'src', 'content', and 'content_base64' are mutually exclusive", f.Dst)
+	}
+	switch {
+	case f.Src != "":
+		return wsl.CopyEntry{Src: f.Src, Dst: f.Dst, Mode: f.Mode}, nil
+	case f.Content != "":
+		return wsl.CopyEntry{Data: []byte(f.Content), Dst: f.Dst, Mode: f.Mode}, nil
+	default:
+		data, err := base64.StdEncoding.DecodeString(f.ContentBase64)
+		if err != nil {
+			return wsl.CopyEntry{}, fmt.Errorf("profile files: %q: decoding content_base64: %w", f.Dst, err)
+		}
+		return wsl.CopyEntry{Data: data, Dst: f.Dst, Mode: f.Mode}, nil
+	}
 }
 
 // dockerLoginCommand defines the `dockerlogin` subcommand. It mirrors a

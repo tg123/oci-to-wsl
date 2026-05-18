@@ -14,6 +14,12 @@ import (
 // the new WSL distribution. Entries are staged by appending them to the
 // rootfs tar before `wsl --import` runs, so the files are present on first
 // boot and available to init_cmds.
+//
+// Exactly one source of file data must be set: Src (read from the host
+// filesystem), Content (inline UTF-8 string body) or ContentBase64 (inline
+// base64-encoded body, for binary or otherwise awkward content). Content
+// and ContentBase64 only produce a single regular file at Dst — they
+// cannot describe a directory tree.
 type FileEntry struct {
 	// Src is the path on the host. May be a file, directory, or symlink.
 	// Windows-native paths (e.g. C:\Users\me\file), %VAR% / $VAR / ${VAR}
@@ -21,7 +27,17 @@ type FileEntry struct {
 	// LoadProfile. Relative paths are resolved against the directory of
 	// the profile file when the entry was loaded via LoadProfile;
 	// otherwise against the current working directory.
-	Src string `yaml:"src"`
+	Src string `yaml:"src,omitempty"`
+
+	// Content is an inline UTF-8 file body. When set, no host file is
+	// read: the bytes are written verbatim to Dst as a single regular
+	// file. Mutually exclusive with Src and ContentBase64.
+	Content string `yaml:"content,omitempty"`
+
+	// ContentBase64 is an inline file body encoded with standard base64.
+	// Use this for binary or otherwise awkward content (it round-trips
+	// through YAML cleanly). Mutually exclusive with Src and Content.
+	ContentBase64 string `yaml:"content_base64,omitempty"`
 
 	// Dst is the destination POSIX path inside the WSL distribution and
 	// must be absolute (start with "/"). For a directory source, the

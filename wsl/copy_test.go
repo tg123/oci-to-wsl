@@ -208,6 +208,83 @@ func TestInjectCopies_RejectsInvalidMode(t *testing.T) {
 	}
 }
 
+func TestInjectCopies_InlineData(t *testing.T) {
+	dir := t.TempDir()
+	tarPath := filepath.Join(dir, "rootfs.tar")
+	writeEmptyTar(t, tarPath)
+
+	body := []byte("inline-bytes\n")
+	if err := wsl.InjectCopies(tarPath, []wsl.CopyEntry{
+		{Data: body, Dst: "/etc/motd"},
+		{Data: []byte{0, 1, 2, 3}, Dst: "/opt/binary.bin", Mode: "0600"},
+		{Data: []byte{}, Dst: "/var/empty.dat"},
+	}); err != nil {
+		t.Fatalf("InjectCopies: %v", err)
+	}
+
+	entries := readTar(t, tarPath)
+
+	motd, ok := entries["etc/motd"]
+	if !ok {
+		t.Fatalf("missing etc/motd; have %v", keysOf(entries))
+	}
+	if string(motd.body) != string(body) {
+		t.Errorf("motd body: got %q, want %q", motd.body, body)
+	}
+	if motd.hdr.Mode != 0644 {
+		t.Errorf("motd default mode: got %o, want 0644", motd.hdr.Mode)
+	}
+
+	bin, ok := entries["opt/binary.bin"]
+	if !ok {
+		t.Fatalf("missing opt/binary.bin")
+	}
+	if string(bin.body) != string([]byte{0, 1, 2, 3}) {
+		t.Errorf("binary body: got %x", bin.body)
+	}
+	if bin.hdr.Mode != 0600 {
+		t.Errorf("binary mode: got %o, want 0600", bin.hdr.Mode)
+	}
+
+	empty, ok := entries["var/empty.dat"]
+	if !ok {
+		t.Fatalf("missing var/empty.dat")
+	}
+	if len(empty.body) != 0 || empty.hdr.Size != 0 {
+		t.Errorf("empty file: got body %d bytes, hdr size %d", len(empty.body), empty.hdr.Size)
+	}
+}
+
+func TestInjectCopies_RejectsBothSrcAndData(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "f")
+	if err := os.WriteFile(src, []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	tarPath := filepath.Join(dir, "rootfs.tar")
+	writeEmptyTar(t, tarPath)
+
+	err := wsl.InjectCopies(tarPath, []wsl.CopyEntry{
+		{Src: src, Data: []byte("y"), Dst: "/etc/f"},
+	})
+	if err == nil {
+		t.Fatal("expected error when both Src and Data are set, got nil")
+	}
+}
+
+func TestInjectCopies_RejectsNeitherSrcNorData(t *testing.T) {
+	dir := t.TempDir()
+	tarPath := filepath.Join(dir, "rootfs.tar")
+	writeEmptyTar(t, tarPath)
+
+	err := wsl.InjectCopies(tarPath, []wsl.CopyEntry{
+		{Dst: "/etc/f"},
+	})
+	if err == nil {
+		t.Fatal("expected error when neither Src nor Data is set, got nil")
+	}
+}
+
 func keysOf(m map[string]tarEntry) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {

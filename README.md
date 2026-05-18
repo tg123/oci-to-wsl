@@ -94,6 +94,12 @@ files:                           # optional – injected into the rootfs tar so 
     replace: false               # optional – default true; false overlays onto the upstream tree instead of replacing it
   - src: '%USERPROFILE%\.gitconfig'  # %VAR%, $VAR / ${VAR} and a leading ~ are expanded
     dst: /root/.gitconfig
+  - dst: /etc/motd               # inline UTF-8 body in place of 'src'
+    content: |
+      Welcome to my-ubuntu
+  - dst: /opt/secret.bin         # inline binary body, base64-encoded
+    content_base64: aGVsbG8gd29ybGQK
+    mode: "0600"
 deletes:                         # optional – absolute POSIX paths dropped from the rootfs tar before import
   - /var/cache/apt               # directories are removed recursively; applied before `files`
   - /etc/motd
