@@ -14,6 +14,35 @@ image: ubuntu:22.04
 # Where to store the WSL virtual disk.  Defaults to .\<name> when omitted.
 install_dir: C:\WSL\my-ubuntu
 
+# Optional: files or folders to stage into the new distribution by appending
+# them to the rootfs tar before `wsl --import` runs, so they are present on
+# first boot and visible to init_cmds. Relative 'src' paths are resolved
+# against the directory containing this profile. Windows %VAR% (e.g.
+# %USERPROFILE%, %APPDATA%), POSIX $VAR / ${VAR} and a leading ~ are expanded
+# in 'src'. Native Windows paths like C:\Users\me\file are accepted. 'dst'
+# must be an absolute POSIX path (start with '/'). 'mode' is optional and is
+# baked into the tar header (no chmod step runs inside the distribution);
+# for a directory source it applies recursively to all regular files.
+copies:
+  - src: ./scripts/bootstrap.sh
+    dst: /usr/local/bin/bootstrap.sh
+    mode: "0755"
+  - src: C:\Users\me\assets
+    dst: /opt/assets
+    mode: "0777"
+  - src: '%USERPROFILE%\.ssh\id_rsa.pub'
+    dst: /root/.ssh/authorized_keys
+    mode: "0600"
+
+# Optional: absolute POSIX paths to remove from the rootfs tar before
+# `wsl --import` runs. Files and directories are both supported; directories
+# are removed recursively. Missing paths are silently ignored. Deletes are
+# applied before `copies`, so you can drop an upstream directory and stage
+# your own replacement at the same destination.
+deletes:
+  - /var/cache/apt
+  - /etc/motd
+
 # Optional: shell commands to run inside the new WSL instance after import.
 init_cmds:
   - apt-get update -y

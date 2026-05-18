@@ -10,6 +10,7 @@ package wsl
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -36,7 +37,12 @@ type ImportOptions struct {
 func Import(opts ImportOptions) error {
 	ctx := context.Background()
 
-	fmt.Printf("Creating WSL distribution %q from %s ...\n", opts.Name, opts.RootfsTar)
+	slog.Info("creating WSL distribution",
+		"name", opts.Name,
+		"install_dir", opts.InstallDir,
+		"rootfs_tar", opts.RootfsTar,
+	)
+	start := time.Now()
 
 	// Spinner while the import runs (gowsl/wsl.exe gives no progress output).
 	spinner := progressbar.NewOptions(-1,
@@ -63,6 +69,7 @@ func Import(opts ImportOptions) error {
 	_, err := gowsl.Import(ctx, opts.Name, opts.RootfsTar, opts.InstallDir)
 	close(done)
 	_ = spinner.Close()
+	slog.Debug("wsl import finished", "duration", time.Since(start))
 	if err != nil {
 		return fmt.Errorf("wsl import failed: %w", err)
 	}
@@ -78,13 +85,16 @@ func Import(opts ImportOptions) error {
 func RunCommand(distro, command string) error {
 	ctx := context.Background()
 
-	d := gowsl.NewDistro(ctx, distro)
-	fmt.Printf("[%s] $ %s\n", distro, command)
+	slog.Info("running command in WSL distribution", "distro", distro, "command", command)
+	start := time.Now()
 
+	d := gowsl.NewDistro(ctx, distro)
 	cmd := d.Command(ctx, command)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
+	err := cmd.Run()
+	slog.Debug("wsl command finished", "distro", distro, "duration", time.Since(start))
+	if err != nil {
 		return fmt.Errorf("command %q failed in %q: %w", command, distro, err)
 	}
 	return nil

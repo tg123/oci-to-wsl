@@ -8,14 +8,16 @@ on:
 permissions:
   contents: read
 
+# All scenario logic lives in the table-driven Go runners (TestE2E /
+# TestE2EDockerDaemon, both guarded by `//go:build e2e`). Each job below
+# is intentionally a baseline of "build the binary, point the runner at
+# it, run `go test -tags=e2e`" — adding or removing scenarios should not
+# require touching this file.
+
 jobs:
-  e2e-wsl-import:
-    name: Pull alpine and import into WSL
+  e2e-windows:
+    name: WSL end-to-end (Go test runner)
     runs-on: windows-latest
-    env:
-      # Force wsl.exe to emit UTF-8 instead of UTF-16 LE so PowerShell string
-      # matching on its output works as expected.
-      WSL_UTF8: "1"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -31,66 +33,36 @@ jobs:
           CGO_ENABLED: 0
         run: go build -trimpath -o oci-to-wsl.exe .
 
-      - name: Enable WSL
+      - name: Run end-to-end test suite
         shell: pwsh
+        env:
+          # Point the e2e tests at the binary we just built. The test
+          # runner requires OCI_TO_WSL_BIN and does not build the binary
+          # itself.
+          OCI_TO_WSL_BIN: ${{ github.workspace }}\oci-to-wsl.exe
         run: |
-          # windows-latest runners ship with wsl.exe; make sure it is on PATH.
-          wsl.exe --status
-          wsl.exe --version
+          go test -tags=e2e -timeout 30m -v .
 
-      - name: Import alpine:latest into WSL
-        shell: pwsh
+  e2e-linux:
+    name: Linux end-to-end (Go test runner)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: 'stable'
+          cache: true
+
+      - name: Build oci-to-wsl
+        env:
+          CGO_ENABLED: 0
+        run: go build -trimpath -o oci-to-wsl .
+
+      - name: Run end-to-end test suite
+        env:
+          OCI_TO_WSL_BIN: ${{ github.workspace }}/oci-to-wsl
         run: |
-          $installDir = Join-Path $PWD 'wsl-e2e-alpine'
-          Write-Host "Install dir: $installDir"
-          .\oci-to-wsl.exe --image alpine:latest --name e2e-alpine --dir $installDir
-          if ($LASTEXITCODE -ne 0) { throw "oci-to-wsl failed with exit code $LASTEXITCODE" }
-          Write-Host "--- install dir contents ---"
-          Get-ChildItem -Force $installDir | Format-Table -AutoSize
-
-      - name: Verify the distribution was created
-        shell: pwsh
-        run: |
-          Write-Host "--- wsl --list --verbose ---"
-          wsl.exe --list --verbose
-          Write-Host "--- wsl --list --quiet ---"
-          $list = wsl.exe --list --quiet
-          Write-Host $list
-          if ($list -notmatch 'e2e-alpine') { throw "e2e-alpine distribution not found" }
-
-      - name: Start the imported distribution
-        shell: pwsh
-        run: |
-          # Explicitly boot the distro so the first verification command does
-          # not race with WSL's VM startup / rootfs mount.
-          wsl.exe -d e2e-alpine --user root --exec /bin/true
-          if ($LASTEXITCODE -ne 0) { throw "failed to start e2e-alpine (exit=$LASTEXITCODE)" }
-          Write-Host "--- wsl --list --verbose (after start) ---"
-          wsl.exe --list --verbose
-
-      - name: Run commands inside the imported distribution
-        shell: pwsh
-        run: |
-          Write-Host "--- ls -la / inside the distro ---"
-          wsl.exe -d e2e-alpine --user root --exec /bin/ls -la / 2>&1 | Out-Host
-          Write-Host "(exit=$LASTEXITCODE)"
-
-          $release = wsl.exe -d e2e-alpine --user root --exec /bin/cat /etc/alpine-release
-          if ($LASTEXITCODE -ne 0) { throw "failed to read /etc/alpine-release" }
-          Write-Host "alpine-release: $release"
-          if ([string]::IsNullOrWhiteSpace($release)) { throw "/etc/alpine-release was empty" }
-
-          $uname = wsl.exe -d e2e-alpine --user root --exec /bin/uname -a
-          if ($LASTEXITCODE -ne 0) { throw "uname failed" }
-          Write-Host "uname: $uname"
-
-          $hello = wsl.exe -d e2e-alpine --user root -- sh -c "echo hello-from-wsl"
-          if ($LASTEXITCODE -ne 0) { throw "sh -c failed" }
-          if ($hello -notmatch 'hello-from-wsl') { throw "unexpected output: $hello" }
-
-      - name: Tear down the test distribution
-        if: always()
-        shell: pwsh
-        run: |
-          wsl.exe --unregister e2e-alpine
-          if ($LASTEXITCODE -ne 0) { Write-Host "unregister failed (non-fatal)" }
+          go test -tags=e2e -timeout 30m -v .
