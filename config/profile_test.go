@@ -263,4 +263,3 @@ func TestLoadProfile_WslConfRejectsUnknownKey(t *testing.T) {
 		t.Fatalf("error = %v, want 'unknown key' message", err)
 	}
 }
-
