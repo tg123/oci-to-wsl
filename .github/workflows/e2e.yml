@@ -150,8 +150,8 @@ jobs:
           wsl.exe --unregister e2e-wslconf
           if ($LASTEXITCODE -ne 0) { Write-Host "unregister failed (non-fatal)" }
 
-  e2e-wsl-conf-yaml-native:
-    name: Profile wsl_conf YAML-native sections
+  e2e-wsl-conf-yaml-mapping:
+    name: Profile wsl_conf content as YAML mapping
     runs-on: windows-latest
     env:
       WSL_UTF8: "1"
@@ -177,32 +177,33 @@ jobs:
           wsl.exe --status
           wsl.exe --version
 
-      - name: Prepare profile with wsl_conf YAML-native sections
+      - name: Prepare profile with wsl_conf content as YAML mapping
         shell: pwsh
         run: |
           $work = Join-Path $PWD 'e2e-wslconf-yaml'
           New-Item -ItemType Directory -Force -Path $work | Out-Null
 
-          # Same effective config as the raw-INI e2e job, but expressed as
-          # YAML-native nested maps. Validates that any top-level key under
-          # wsl_conf other than mode/content is treated as a section, and
-          # that env-var expansion runs over the rendered INI.
+          # Same effective config as the raw-INI e2e job, but `content` is a
+          # YAML mapping of sections instead of an INI string. Validates that
+          # the mapping form renders to the same INI and that env-var
+          # expansion still runs over the rendered text.
           $profile = @'
           name: e2e-wslconf-yaml
           image: alpine:latest
           wsl_conf:
             mode: merge
-            boot:
-              systemd: false
-            user:
-              default: "%WSL_CONF_E2E_USER%"
-            interop:
-              appendWindowsPath: false
+            content:
+              boot:
+                systemd: false
+              user:
+                default: "%WSL_CONF_E2E_USER%"
+              interop:
+                appendWindowsPath: false
           '@
           Set-Content -Path (Join-Path $work 'profile.yaml') -Value $profile
           Get-Content (Join-Path $work 'profile.yaml')
 
-      - name: Import with wsl_conf YAML-native profile
+      - name: Import with wsl_conf YAML-mapping profile
         shell: pwsh
         run: |
           $work = Join-Path $PWD 'e2e-wslconf-yaml'
@@ -210,7 +211,7 @@ jobs:
           .\oci-to-wsl.exe --profile (Join-Path $work 'profile.yaml') --dir $installDir
           if ($LASTEXITCODE -ne 0) { throw "oci-to-wsl failed with exit code $LASTEXITCODE" }
 
-      - name: Verify /etc/wsl.conf content (YAML-native sections, env var expanded)
+      - name: Verify /etc/wsl.conf content (YAML-mapping form, env var expanded)
         shell: pwsh
         run: |
           $conf = wsl.exe -d e2e-wslconf-yaml --user root --exec /bin/cat /etc/wsl.conf

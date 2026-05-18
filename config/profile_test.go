@@ -224,8 +224,8 @@ func TestLoadProfile_WslConfPreservesUnknownVars(t *testing.T) {
 	}
 }
 
-func TestLoadProfile_WslConfYAMLNativeSections(t *testing.T) {
-	yaml := "name: n\nimage: i\nwsl_conf:\n  mode: replace\n  boot:\n    systemd: true\n    command: echo hi\n  user:\n    default: alice\n"
+func TestLoadProfile_WslConfContentAsYAMLMapping(t *testing.T) {
+	yaml := "name: n\nimage: i\nwsl_conf:\n  mode: replace\n  content:\n    boot:\n      systemd: true\n      command: echo hi\n    user:\n      default: alice\n"
 	p := writeAndLoad(t, yaml)
 	if p.WslConf == nil {
 		t.Fatal("WslConf nil")
@@ -239,36 +239,26 @@ func TestLoadProfile_WslConfYAMLNativeSections(t *testing.T) {
 	}
 }
 
-func TestLoadProfile_WslConfYAMLNativeMixedWithContent(t *testing.T) {
-	yaml := "name: n\nimage: i\nwsl_conf:\n  content: |\n    [boot]\n    systemd=false\n  boot:\n    systemd: true\n"
-	p := writeAndLoad(t, yaml)
-	if p.WslConf == nil {
-		t.Fatal("WslConf nil")
-	}
-	// YAML-native sections are appended after raw content; on merge they win.
-	if !strings.Contains(p.WslConf.Content, "[boot]\nsystemd=false\n") {
-		t.Fatalf("raw content missing, got %q", p.WslConf.Content)
-	}
-	if !strings.Contains(p.WslConf.Content, "[boot]\nsystemd = true\n") {
-		t.Fatalf("YAML-native section missing, got %q", p.WslConf.Content)
-	}
-}
-
-func TestLoadProfile_WslConfYAMLNativeExpandsEnvVars(t *testing.T) {
+func TestLoadProfile_WslConfContentMappingExpandsEnvVars(t *testing.T) {
 	t.Setenv("OCI_TO_WSL_TEST_USER", "alice")
-	yaml := "name: n\nimage: i\nwsl_conf:\n  user:\n    default: $OCI_TO_WSL_TEST_USER\n"
+	yaml := "name: n\nimage: i\nwsl_conf:\n  content:\n    user:\n      default: $OCI_TO_WSL_TEST_USER\n"
 	p := writeAndLoad(t, yaml)
 	if p.WslConf == nil || !strings.Contains(p.WslConf.Content, "default = alice") {
-		t.Fatalf("env var not expanded in YAML-native form, got %q", p.WslConf.Content)
+		t.Fatalf("env var not expanded in mapping form, got %q", p.WslConf.Content)
 	}
 }
 
-func contains(s, sub string) bool { return len(s) >= len(sub) && (s == sub || (len(sub) > 0 && indexOf(s, sub) >= 0)) }
-func indexOf(s, sub string) int {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
+func TestLoadProfile_WslConfRejectsUnknownKey(t *testing.T) {
+	t.Helper()
+	yaml := "name: n\nimage: i\nwsl_conf:\n  boot:\n    systemd: true\n"
+	path := filepath.Join(t.TempDir(), "profile.yaml")
+	if err := os.WriteFile(path, []byte(yaml), 0600); err != nil {
+		t.Fatal(err)
 	}
-	return -1
+	if _, err := config.LoadProfile(path); err == nil {
+		t.Fatal("expected error for unknown key under wsl_conf")
+	} else if !strings.Contains(err.Error(), "unknown key") {
+		t.Fatalf("error = %v, want 'unknown key' message", err)
+	}
 }
+

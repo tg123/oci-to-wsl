@@ -70,16 +70,16 @@ wsl_conf:
     [interop]
     appendWindowsPath=false
 
-# Alternative YAML-native form (any key other than `mode`/`content` is a
-# wsl.conf section name; values are scalars). Both forms may also be mixed
-# in the same `wsl_conf:` block, in which case YAML-native sections are
-# appended after `content` and override it on merge.
+# `content` can also be expressed as a YAML mapping of sections instead of a
+# raw INI string. Both forms produce exactly the same /etc/wsl.conf, and
+# %VAR% / $VAR / ${VAR} expansion is applied to the rendered text either way.
 #
 # wsl_conf:
 #   mode: merge
-#   boot:
-#     systemd: true
-#   user:
-#     default: %USERNAME%
-#   interop:
-#     appendWindowsPath: false
+#   content:
+#     boot:
+#       systemd: true
+#     user:
+#       default: "%USERNAME%"
+#     interop:
+#       appendWindowsPath: false

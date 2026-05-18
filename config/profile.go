@@ -80,23 +80,24 @@ type Profile struct {
 
 // WslConfEntry describes how to materialise /etc/wsl.conf in the rootfs tar.
 //
-// Two YAML shapes are accepted; both populate Content (the YAML-native form
-// is rendered to INI text at load time and appended after any explicit
-// Content, so it overrides on merge):
+// `content` accepts two shapes, both of which produce the same INI body:
 //
-//  1. Raw INI string under `content:` —
+//  1. Raw INI string (a YAML scalar) —
 //
 //     wsl_conf:
 //     mode: merge
 //     content: |
 //     [boot]
 //     systemd=true
+//     [user]
+//     default=alice
 //
-//  2. YAML-native sections as nested maps (any top-level key other than
-//     `mode`/`content` is treated as a wsl.conf section name) —
+//  2. YAML mapping of sections (each top-level key is a wsl.conf section
+//     name, each value is a mapping of scalar key/value pairs) —
 //
 //     wsl_conf:
 //     mode: merge
+//     content:
 //     boot:
 //     systemd: true
 //     user:
@@ -104,25 +105,26 @@ type Profile struct {
 //
 // wsl.conf is a flat INI (sections automount/network/interop/user/boot/time/
 // gpu/experimental, each a bag of scalar key=value pairs per
-// https://learn.microsoft.com/windows/wsl/wsl-config), so the YAML-native
-// mapping is unambiguous.
+// https://learn.microsoft.com/windows/wsl/wsl-config), so the YAML-mapping
+// form is unambiguous.
 type WslConfEntry struct {
 	// Mode is either "merge" (default) or "replace". Merge combines
 	// Content with any existing /etc/wsl.conf in the image, with user
 	// keys overriding existing keys; replace overwrites it outright.
 	Mode string `yaml:"mode"`
 
-	// Content is the wsl.conf body in standard INI format.
+	// Content is the wsl.conf body in standard INI format. When the
+	// profile uses the YAML-mapping form of `content`, the mapping is
+	// rendered to INI text at load time and stored here.
 	Content string `yaml:"content"`
 }
 
-// UnmarshalYAML accepts both the raw `content:` form and the YAML-native
-// section-map form (see WslConfEntry docs).
+// UnmarshalYAML accepts both the raw `content:` string form and the
+// YAML-mapping form (see WslConfEntry docs).
 func (w *WslConfEntry) UnmarshalYAML(node *yaml.Node) error {
 	if node.Kind != yaml.MappingNode {
 		return fmt.Errorf("wsl_conf: expected a mapping, got %s", yamlKindName(node.Kind))
 	}
-	var sectionsINI strings.Builder
 	for i := 0; i < len(node.Content); i += 2 {
 		k, v := node.Content[i], node.Content[i+1]
 		if k.Kind != yaml.ScalarNode {
@@ -134,38 +136,59 @@ func (w *WslConfEntry) UnmarshalYAML(node *yaml.Node) error {
 				return fmt.Errorf("wsl_conf.mode: %w", err)
 			}
 		case "content":
-			if err := v.Decode(&w.Content); err != nil {
-				return fmt.Errorf("wsl_conf.content: %w", err)
+			rendered, err := renderWslConfContent(v)
+			if err != nil {
+				return err
 			}
+			w.Content = rendered
 		default:
-			if v.Kind != yaml.MappingNode {
-				return fmt.Errorf("wsl_conf.%s: expected a mapping of key/value pairs, got %s", k.Value, yamlKindName(v.Kind))
-			}
-			if sectionsINI.Len() > 0 {
-				sectionsINI.WriteString("\n")
-			}
-			sectionsINI.WriteString("[")
-			sectionsINI.WriteString(k.Value)
-			sectionsINI.WriteString("]\n")
-			for j := 0; j < len(v.Content); j += 2 {
-				kk, vv := v.Content[j], v.Content[j+1]
-				if kk.Kind != yaml.ScalarNode || vv.Kind != yaml.ScalarNode {
-					return fmt.Errorf("wsl_conf.%s: expected scalar key/value at line %d", k.Value, kk.Line)
-				}
-				sectionsINI.WriteString(kk.Value)
-				sectionsINI.WriteString(" = ")
-				sectionsINI.WriteString(vv.Value)
-				sectionsINI.WriteString("\n")
-			}
+			return fmt.Errorf("wsl_conf: unknown key %q (expected one of: mode, content)", k.Value)
 		}
-	}
-	if sectionsINI.Len() > 0 {
-		if w.Content != "" && !strings.HasSuffix(w.Content, "\n") {
-			w.Content += "\n"
-		}
-		w.Content += sectionsINI.String()
 	}
 	return nil
+}
+
+// renderWslConfContent accepts either a YAML scalar (raw INI text) or a YAML
+// mapping of sections-to-keys and returns the corresponding INI body.
+func renderWslConfContent(v *yaml.Node) (string, error) {
+	switch v.Kind {
+	case yaml.ScalarNode:
+		var s string
+		if err := v.Decode(&s); err != nil {
+			return "", fmt.Errorf("wsl_conf.content: %w", err)
+		}
+		return s, nil
+	case yaml.MappingNode:
+		var b strings.Builder
+		for i := 0; i < len(v.Content); i += 2 {
+			sk, sv := v.Content[i], v.Content[i+1]
+			if sk.Kind != yaml.ScalarNode {
+				return "", fmt.Errorf("wsl_conf.content: non-scalar section name at line %d", sk.Line)
+			}
+			if sv.Kind != yaml.MappingNode {
+				return "", fmt.Errorf("wsl_conf.content.%s: expected a mapping of key/value pairs, got %s", sk.Value, yamlKindName(sv.Kind))
+			}
+			if b.Len() > 0 {
+				b.WriteString("\n")
+			}
+			b.WriteString("[")
+			b.WriteString(sk.Value)
+			b.WriteString("]\n")
+			for j := 0; j < len(sv.Content); j += 2 {
+				kk, vv := sv.Content[j], sv.Content[j+1]
+				if kk.Kind != yaml.ScalarNode || vv.Kind != yaml.ScalarNode {
+					return "", fmt.Errorf("wsl_conf.content.%s: expected scalar key/value at line %d", sk.Value, kk.Line)
+				}
+				b.WriteString(kk.Value)
+				b.WriteString(" = ")
+				b.WriteString(vv.Value)
+				b.WriteString("\n")
+			}
+		}
+		return b.String(), nil
+	default:
+		return "", fmt.Errorf("wsl_conf.content: expected a string or a mapping of sections, got %s", yamlKindName(v.Kind))
+	}
 }
 
 func yamlKindName(k yaml.Kind) string {

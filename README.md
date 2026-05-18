@@ -103,13 +103,13 @@ wsl_conf:                        # optional – syntactic sugar for writing /etc
     systemd=true
     [user]
     default=%USERNAME%
-  # Or use the YAML-native form: any key other than `mode`/`content` is a
-  # wsl.conf section. Both forms may be mixed; YAML-native sections are
-  # appended after `content` and so win on merge.
-  # boot:
-  #   systemd: true
-  # user:
-  #   default: %USERNAME%
+  # `content` also accepts a YAML mapping of sections, which is rendered to
+  # the same INI body (env-var expansion still applies):
+  # content:
+  #   boot:
+  #     systemd: true
+  #   user:
+  #     default: "%USERNAME%"
 init_cmds:                       # optional – run inside the new distro after import
   - apt-get update -y
   - apt-get install -y curl git
