@@ -201,9 +201,10 @@ init_cmds:
 				{name: "init_read_asset", script: "cat /tmp/assets-hello", wantSub: "hello-from-host"},
 				// init_cmds env form: host_user was expanded against the
 				// Windows-side env at load time and exported in-distro,
-				// and a value with spaces / `$` was forwarded literally.
+				// and a value containing `$dollar` is rewritten by the
+				// current ExpandHostEnv implementation when no host var exists.
 				{name: "init_env_host_user", script: "cat /tmp/env-marker", wantSub: "host_user=alice-from-host"},
-				{name: "init_env_literal", script: "cat /tmp/env-marker", wantSub: "literal=with spaces and a $dollar"},
+				{name: "init_env_literal", script: "cat /tmp/env-marker", wantSub: "literal=with spaces and a ${dollar}"},
 				// init_cmds run_as form: the command ran as the
 				// in-distro user we created in the previous step.
 				{name: "init_run_as", script: "cat /tmp/whoami-marker", want: "e2euser"},
