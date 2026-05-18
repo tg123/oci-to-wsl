@@ -209,6 +209,85 @@ init_cmds:
 				{name: "init_run_as", script: "cat /tmp/whoami-marker", want: "e2euser"},
 			},
 		},
+		{
+			name:   "profile_wsl_conf_ini_content",
+			distro: "e2e-wslconf",
+			setup: func(t *testing.T, workDir string) []string {
+				// alpine:latest does not ship /etc/wsl.conf, so merge
+				// effectively writes a fresh file. The [user] section
+				// uses %WSL_CONF_E2E_USER% which must be expanded to
+				// "alice" by ExpandEnvVars at profile-load time.
+				t.Setenv("WSL_CONF_E2E_USER", "alice")
+				profile := `name: e2e-wslconf
+image: alpine:latest
+wsl_conf:
+  mode: merge
+  content: |
+    [boot]
+    systemd=false
+    [user]
+    default=%WSL_CONF_E2E_USER%
+    [interop]
+    appendWindowsPath=false
+`
+				profilePath := filepath.Join(workDir, "profile.yaml")
+				mustWrite(t, profilePath, profile)
+				installDir := filepath.Join(workDir, "wsl-e2e-wslconf")
+				return []string{
+					"--profile", profilePath,
+					"--dir", installDir,
+				}
+			},
+			verifies: []verify{
+				{name: "wsl_conf_exists", script: "test -s /etc/wsl.conf && echo ok", want: "ok"},
+				{name: "env_var_expanded", script: "cat /etc/wsl.conf", wantSub: "default=alice"},
+				{name: "no_unexpanded_token", script: "grep -c WSL_CONF_E2E_USER /etc/wsl.conf || true", want: "0"},
+				{name: "boot_section", script: "cat /etc/wsl.conf", wantSub: "[boot]"},
+				{name: "systemd_false", script: "cat /etc/wsl.conf", wantSub: "systemd=false"},
+				{name: "interop_section", script: "cat /etc/wsl.conf", wantSub: "[interop]"},
+				{name: "append_windows_path", script: "cat /etc/wsl.conf", wantSub: "appendWindowsPath=false"},
+			},
+		},
+		{
+			name:   "profile_wsl_conf_yaml_mapping_content",
+			distro: "e2e-wslconf-yaml",
+			setup: func(t *testing.T, workDir string) []string {
+				// Same effective config as the INI-string case above, but
+				// `content` is a YAML mapping of sections instead of a
+				// raw INI string. Validates that the mapping form renders
+				// to the same INI and that env-var expansion still runs
+				// over the rendered text.
+				t.Setenv("WSL_CONF_E2E_USER", "alice")
+				profile := `name: e2e-wslconf-yaml
+image: alpine:latest
+wsl_conf:
+  mode: merge
+  content:
+    boot:
+      systemd: false
+    user:
+      default: "%WSL_CONF_E2E_USER%"
+    interop:
+      appendWindowsPath: false
+`
+				profilePath := filepath.Join(workDir, "profile.yaml")
+				mustWrite(t, profilePath, profile)
+				installDir := filepath.Join(workDir, "wsl-e2e-wslconf-yaml")
+				return []string{
+					"--profile", profilePath,
+					"--dir", installDir,
+				}
+			},
+			verifies: []verify{
+				{name: "wsl_conf_exists", script: "test -s /etc/wsl.conf && echo ok", want: "ok"},
+				{name: "env_var_expanded", script: "cat /etc/wsl.conf", wantSub: "default = alice"},
+				{name: "no_unexpanded_token", script: "grep -c WSL_CONF_E2E_USER /etc/wsl.conf || true", want: "0"},
+				{name: "boot_section", script: "cat /etc/wsl.conf", wantSub: "[boot]"},
+				{name: "systemd_false", script: "cat /etc/wsl.conf", wantSub: "systemd = false"},
+				{name: "interop_section", script: "cat /etc/wsl.conf", wantSub: "[interop]"},
+				{name: "append_windows_path", script: "cat /etc/wsl.conf", wantSub: "appendWindowsPath = false"},
+			},
+		},
 	}
 
 	for _, tc := range cases {

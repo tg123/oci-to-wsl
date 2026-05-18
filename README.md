@@ -107,6 +107,20 @@ copies:                          # optional – injected into the rootfs tar so 
 deletes:                         # optional – absolute POSIX paths dropped from the rootfs tar before import
   - /var/cache/apt               # directories are removed recursively; applied before `copies`
   - /etc/motd
+wsl_conf:                        # optional – syntactic sugar for writing /etc/wsl.conf
+  mode: merge                    # "merge" (default) merges with any existing /etc/wsl.conf; "replace" overwrites
+  content: |                     # raw INI string – %VAR%, $VAR and ${VAR} are expanded against the host environment
+    [boot]
+    systemd=true
+    [user]
+    default=%USERNAME%
+  # `content` also accepts a YAML mapping of sections, which is rendered to
+  # the same INI body (env-var expansion still applies):
+  # content:
+  #   boot:
+  #     systemd: true
+  #   user:
+  #     default: "%USERNAME%"
 init_cmds:                       # optional – run inside the new distro after import
   - apt-get update -y            # plain-string form: command line as-is
   - apt-get install -y curl git

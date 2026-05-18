@@ -245,6 +245,14 @@ func loadProfile(profile *config.Profile, saveTar string) error {
 		}
 	}
 
+	// Apply the wsl_conf profile sugar last so that it can override any
+	// /etc/wsl.conf staged via copies (or shipped in the upstream image).
+	if profile.WslConf != nil && strings.TrimSpace(profile.WslConf.Content) != "" {
+		if err := wsl.ApplyWslConf(tarPath, profile.WslConf.Content, wsl.WslConfMode(profile.WslConf.Mode)); err != nil {
+			return fmt.Errorf("applying wsl_conf to rootfs tar: %w", err)
+		}
+	}
+
 	if saveTar != "" {
 		fi, _ := os.Stat(tarPath)
 		var size int64

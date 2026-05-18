@@ -3,6 +3,7 @@ package config_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tg123/oci-to-wsl/config"
@@ -269,5 +270,67 @@ func TestLoadProfile_InitCmds_InvalidEntry(t *testing.T) {
 	}
 	if _, err := config.LoadProfile(path); err == nil {
 		t.Fatal("expected error for non-string / non-mapping init_cmds entry, got nil")
+	}
+}
+
+func TestLoadProfile_WslConfExpandsEnvVars(t *testing.T) {
+	t.Setenv("OCI_TO_WSL_TEST_USER", "alice")
+	yaml := "name: n\nimage: i\nwsl_conf:\n  mode: replace\n  content: |\n    [user]\n    default=$OCI_TO_WSL_TEST_USER\n    home=%OCI_TO_WSL_TEST_USER%\n"
+	p := writeAndLoad(t, yaml)
+	if p.WslConf == nil {
+		t.Fatal("WslConf nil")
+	}
+	want := "[user]\ndefault=alice\nhome=alice\n"
+	if p.WslConf.Content != want {
+		t.Fatalf("Content = %q, want %q", p.WslConf.Content, want)
+	}
+}
+
+func TestLoadProfile_WslConfPreservesUnknownVars(t *testing.T) {
+	if err := os.Unsetenv("OCI_TO_WSL_TEST_MISSING"); err != nil {
+		t.Fatalf("unsetenv: %v", err)
+	}
+	yaml := "name: n\nimage: i\nwsl_conf:\n  content: |\n    [user]\n    default=$OCI_TO_WSL_TEST_MISSING\n"
+	p := writeAndLoad(t, yaml)
+	if p.WslConf == nil || !strings.Contains(p.WslConf.Content, "${OCI_TO_WSL_TEST_MISSING}") {
+		t.Fatalf("missing var should be preserved as ${...}, got %q", p.WslConf.Content)
+	}
+}
+
+func TestLoadProfile_WslConfContentAsYAMLMapping(t *testing.T) {
+	yaml := "name: n\nimage: i\nwsl_conf:\n  mode: replace\n  content:\n    boot:\n      systemd: true\n      command: echo hi\n    user:\n      default: alice\n"
+	p := writeAndLoad(t, yaml)
+	if p.WslConf == nil {
+		t.Fatal("WslConf nil")
+	}
+	if p.WslConf.Mode != "replace" {
+		t.Fatalf("Mode = %q, want replace", p.WslConf.Mode)
+	}
+	want := "[boot]\nsystemd = true\ncommand = echo hi\n\n[user]\ndefault = alice\n"
+	if p.WslConf.Content != want {
+		t.Fatalf("Content = %q, want %q", p.WslConf.Content, want)
+	}
+}
+
+func TestLoadProfile_WslConfContentMappingExpandsEnvVars(t *testing.T) {
+	t.Setenv("OCI_TO_WSL_TEST_USER", "alice")
+	yaml := "name: n\nimage: i\nwsl_conf:\n  content:\n    user:\n      default: $OCI_TO_WSL_TEST_USER\n"
+	p := writeAndLoad(t, yaml)
+	if p.WslConf == nil || !strings.Contains(p.WslConf.Content, "default = alice") {
+		t.Fatalf("env var not expanded in mapping form, got %q", p.WslConf.Content)
+	}
+}
+
+func TestLoadProfile_WslConfRejectsUnknownKey(t *testing.T) {
+	t.Helper()
+	yaml := "name: n\nimage: i\nwsl_conf:\n  boot:\n    systemd: true\n"
+	path := filepath.Join(t.TempDir(), "profile.yaml")
+	if err := os.WriteFile(path, []byte(yaml), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.LoadProfile(path); err == nil {
+		t.Fatal("expected error for unknown key under wsl_conf")
+	} else if !strings.Contains(err.Error(), "unknown key") {
+		t.Fatalf("error = %v, want 'unknown key' message", err)
 	}
 }
