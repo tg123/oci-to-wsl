@@ -98,11 +98,18 @@ deletes:                         # optional – absolute POSIX paths dropped fro
   - /etc/motd
 wsl_conf:                        # optional – syntactic sugar for writing /etc/wsl.conf
   mode: merge                    # "merge" (default) merges with any existing /etc/wsl.conf; "replace" overwrites
-  content: |                     # %VAR%, $VAR and ${VAR} are expanded against the host environment
+  content: |                     # raw INI string – %VAR%, $VAR and ${VAR} are expanded against the host environment
     [boot]
     systemd=true
     [user]
     default=%USERNAME%
+  # Or use the YAML-native form: any key other than `mode`/`content` is a
+  # wsl.conf section. Both forms may be mixed; YAML-native sections are
+  # appended after `content` and so win on merge.
+  # boot:
+  #   systemd: true
+  # user:
+  #   default: %USERNAME%
 init_cmds:                       # optional – run inside the new distro after import
   - apt-get update -y
   - apt-get install -y curl git
