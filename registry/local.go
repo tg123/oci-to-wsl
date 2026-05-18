@@ -2,6 +2,7 @@ package registry
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 
@@ -32,23 +33,30 @@ const envDisableLocal = "OCI_TO_WSL_NO_LOCAL"
 // caller can surface it rather than masking it with a registry-pull failure.
 func loadFromLocal(imageRef string) (v1.Image, bool, error) {
 	if isLocalDisabled() {
+		slog.Debug("local docker daemon probe disabled via env", "env", envDisableLocal)
 		return nil, false, nil
 	}
 	ref, err := name.ParseReference(imageRef)
 	if err != nil {
 		return nil, false, fmt.Errorf("parsing image reference %q: %w", imageRef, err)
 	}
+	slog.Debug("probing local docker daemon for image", "image", ref.String())
 	img, err := daemon.Image(ref)
 	if err != nil {
 		// "Image not present" and "daemon unreachable" are both expected
 		// reasons to fall through to the registry path; everything else
 		// is genuinely unexpected and should be surfaced.
-		if errdefs.IsNotFound(err) || client.IsErrConnectionFailed(err) {
+		if errdefs.IsNotFound(err) {
+			slog.Debug("image not present in local docker daemon", "image", ref.String())
+			return nil, false, nil
+		}
+		if client.IsErrConnectionFailed(err) {
+			slog.Debug("local docker daemon unreachable, falling back to registry", "image", ref.String(), "error", err)
 			return nil, false, nil
 		}
 		return nil, false, fmt.Errorf("loading %q from local docker daemon: %w", imageRef, err)
 	}
-	fmt.Printf("Found image %s in local docker daemon, using it instead of pulling from registry.\n", ref)
+	slog.Info("using image from local docker daemon", "image", ref.String())
 	return img, true, nil
 }
 

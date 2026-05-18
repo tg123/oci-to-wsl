@@ -3,6 +3,7 @@ package wsl
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"runtime"
@@ -34,7 +35,12 @@ func Import(opts ImportOptions) error {
 	}
 
 	args := []string{"--import", opts.Name, opts.InstallDir, opts.RootfsTar}
-	fmt.Printf("Creating WSL distribution %q from %s ...\n", opts.Name, opts.RootfsTar)
+	slog.Info("creating WSL distribution",
+		"name", opts.Name,
+		"install_dir", opts.InstallDir,
+		"rootfs_tar", opts.RootfsTar,
+	)
+	slog.Debug("executing wsl.exe", "path", wslPath, "args", args)
 	cmd := exec.Command(wslPath, args...) //nolint:gosec
 	cmd.Stdout = nil
 	cmd.Stderr = nil
@@ -81,7 +87,8 @@ func RunCommand(distro, command string) error {
 	}
 
 	args := []string{"--distribution", distro, "--", "sh", "-c", command}
-	fmt.Printf("[%s] $ %s\n", distro, command)
+	slog.Info("running init command in WSL distribution", "distro", distro, "command", command)
+	slog.Debug("executing wsl.exe", "path", wslPath, "args", args)
 	cmd := exec.Command(wslPath, args...) //nolint:gosec
 	cmd.Stdout = nil
 	cmd.Stderr = nil

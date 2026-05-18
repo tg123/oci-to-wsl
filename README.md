@@ -128,3 +128,5 @@ No credentials are stored on disk by this tool.
 | `--image <ref>` | OCI image reference (required without `--profile`) |
 | `--name <distro>` | WSL distribution name (required without `--profile`) |
 | `--dir <path>` | Directory to store the WSL virtual disk (default: `.\<name>`) |
+| `--save-tar <path>` | Write the rootfs tar to `<path>` and skip `wsl --import` |
+| `--loglevel <level>` | Logging verbosity: `debug`, `info` (default), `warn`, or `error` |

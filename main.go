@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/tg123/oci-to-wsl/config"
+	"github.com/tg123/oci-to-wsl/logging"
 	"github.com/tg123/oci-to-wsl/registry"
 	"github.com/tg123/oci-to-wsl/wsl"
 )
@@ -64,7 +66,13 @@ Examples:
 				Name:  "save-tar",
 				Usage: "write the exported rootfs tar to this path and skip 'wsl --import' (useful on non-Windows hosts). Set OCI_TO_WSL_PLATFORM=os/arch (e.g. linux/arm64) to override the image platform; this is only honored in save-tar mode.",
 			},
+			&cli.StringFlag{
+				Name:  "loglevel",
+				Value: logging.DefaultLevel,
+				Usage: "logging verbosity: debug, info, warn, or error",
+			},
 		},
+		Before:   setupLogging,
 		Action:   action,
 		Commands: []*cli.Command{dockerLoginCommand()},
 	}
@@ -73,6 +81,13 @@ Examples:
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func setupLogging(ctx context.Context, cmd *cli.Command) (context.Context, error) {
+	if err := logging.Setup(cmd.String("loglevel")); err != nil {
+		return ctx, err
+	}
+	return ctx, nil
 }
 
 func action(_ context.Context, cmd *cli.Command) error {
@@ -175,10 +190,13 @@ func loadProfile(profile *config.Profile, saveTar string) error {
 	}
 	_ = tarFile.Close()
 
+	slog.Debug("rootfs tar staged", "path", tarPath, "save_tar_mode", saveTar != "")
+
 	// Apply any profile-driven deletions before staging copies, so a
 	// profile can drop an upstream directory and then place its own
 	// replacement at the same destination.
 	if len(profile.Deletes) > 0 {
+		slog.Debug("applying profile deletes", "count", len(profile.Deletes))
 		if err := wsl.ApplyDeletes(tarPath, profile.Deletes); err != nil {
 			return fmt.Errorf("applying deletes to rootfs tar: %w", err)
 		}
@@ -189,6 +207,7 @@ func loadProfile(profile *config.Profile, saveTar string) error {
 	// finishes, before any init_cmds run. This avoids any dependency on a
 	// tar binary inside the container.
 	if len(profile.Copies) > 0 {
+		slog.Debug("staging profile copies into rootfs tar", "count", len(profile.Copies))
 		injects := make([]wsl.CopyEntry, 0, len(profile.Copies))
 		for _, c := range profile.Copies {
 			if c.Src == "" || c.Dst == "" {
@@ -203,11 +222,16 @@ func loadProfile(profile *config.Profile, saveTar string) error {
 
 	if saveTar != "" {
 		fi, _ := os.Stat(tarPath)
-		fmt.Printf("Wrote rootfs tar to %s", tarPath)
+		var size int64
 		if fi != nil {
-			fmt.Printf(" (%d bytes)", fi.Size())
+			size = fi.Size()
 		}
-		fmt.Println()
+		slog.Info("wrote rootfs tar", "path", tarPath, "bytes", size)
+		if size > 0 {
+			fmt.Printf("Wrote rootfs tar to %s (%d bytes)\n", tarPath, size)
+		} else {
+			fmt.Printf("Wrote rootfs tar to %s\n", tarPath)
+		}
 		return nil
 	}
 
@@ -220,6 +244,7 @@ func loadProfile(profile *config.Profile, saveTar string) error {
 		return err
 	}
 
+	slog.Info("wsl distribution created", "name", profile.Name)
 	fmt.Printf("WSL distribution %q created successfully.\n", profile.Name)
 
 	// Run any post-creation initialisation commands.
@@ -230,6 +255,7 @@ func loadProfile(profile *config.Profile, saveTar string) error {
 	}
 
 	if len(profile.InitCmds) > 0 {
+		slog.Info("initialisation complete", "name", profile.Name, "init_cmds", len(profile.InitCmds))
 		fmt.Printf("Initialisation of %q complete.\n", profile.Name)
 	}
 	return nil
