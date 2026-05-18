@@ -157,6 +157,144 @@ type Profile struct {
 
 	// InitCmds is a list of shell commands to run inside the new WSL instance after it is created.
 	InitCmds []string `yaml:"init_cmds"`
+
+	// WslConf, when set, writes /etc/wsl.conf into the rootfs tar before
+	// `wsl --import` runs. It is syntactic sugar over `copies`/`deletes`
+	// that additionally understands the wsl.conf INI format: with Mode
+	// "merge" (the default) it merges the user-supplied content with any
+	// existing /etc/wsl.conf in the image section- and key-wise; with Mode
+	// "replace" it discards any existing /etc/wsl.conf and writes Content
+	// verbatim.
+	WslConf *WslConfEntry `yaml:"wsl_conf"`
+}
+
+// WslConfEntry describes how to materialise /etc/wsl.conf in the rootfs tar.
+//
+// `content` accepts two shapes, both of which produce the same INI body:
+//
+//  1. Raw INI string (a YAML scalar) —
+//
+//     wsl_conf:
+//     mode: merge
+//     content: |
+//     [boot]
+//     systemd=true
+//     [user]
+//     default=alice
+//
+//  2. YAML mapping of sections (each top-level key is a wsl.conf section
+//     name, each value is a mapping of scalar key/value pairs) —
+//
+//     wsl_conf:
+//     mode: merge
+//     content:
+//     boot:
+//     systemd: true
+//     user:
+//     default: alice
+//
+// wsl.conf is a flat INI (sections automount/network/interop/user/boot/time/
+// gpu/experimental, each a bag of scalar key=value pairs per
+// https://learn.microsoft.com/windows/wsl/wsl-config), so the YAML-mapping
+// form is unambiguous.
+type WslConfEntry struct {
+	// Mode is either "merge" (default) or "replace". Merge combines
+	// Content with any existing /etc/wsl.conf in the image, with user
+	// keys overriding existing keys; replace overwrites it outright.
+	Mode string `yaml:"mode"`
+
+	// Content is the wsl.conf body in standard INI format. When the
+	// profile uses the YAML-mapping form of `content`, the mapping is
+	// rendered to INI text at load time and stored here.
+	Content string `yaml:"content"`
+}
+
+// UnmarshalYAML accepts both the raw `content:` string form and the
+// YAML-mapping form (see WslConfEntry docs).
+func (w *WslConfEntry) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.MappingNode {
+		return fmt.Errorf("wsl_conf: expected a mapping, got %s", yamlKindName(node.Kind))
+	}
+	for i := 0; i < len(node.Content); i += 2 {
+		k, v := node.Content[i], node.Content[i+1]
+		if k.Kind != yaml.ScalarNode {
+			return fmt.Errorf("wsl_conf: non-scalar key at line %d", k.Line)
+		}
+		switch k.Value {
+		case "mode":
+			if err := v.Decode(&w.Mode); err != nil {
+				return fmt.Errorf("wsl_conf.mode: %w", err)
+			}
+		case "content":
+			rendered, err := renderWslConfContent(v)
+			if err != nil {
+				return err
+			}
+			w.Content = rendered
+		default:
+			return fmt.Errorf("wsl_conf: unknown key %q (expected one of: mode, content)", k.Value)
+		}
+	}
+	return nil
+}
+
+// renderWslConfContent accepts either a YAML scalar (raw INI text) or a YAML
+// mapping of sections-to-keys and returns the corresponding INI body.
+func renderWslConfContent(v *yaml.Node) (string, error) {
+	switch v.Kind {
+	case yaml.ScalarNode:
+		var s string
+		if err := v.Decode(&s); err != nil {
+			return "", fmt.Errorf("wsl_conf.content: %w", err)
+		}
+		return s, nil
+	case yaml.MappingNode:
+		var b strings.Builder
+		for i := 0; i < len(v.Content); i += 2 {
+			sk, sv := v.Content[i], v.Content[i+1]
+			if sk.Kind != yaml.ScalarNode {
+				return "", fmt.Errorf("wsl_conf.content: non-scalar section name at line %d", sk.Line)
+			}
+			if sv.Kind != yaml.MappingNode {
+				return "", fmt.Errorf("wsl_conf.content.%s: expected a mapping of key/value pairs, got %s", sk.Value, yamlKindName(sv.Kind))
+			}
+			if b.Len() > 0 {
+				b.WriteString("\n")
+			}
+			b.WriteString("[")
+			b.WriteString(sk.Value)
+			b.WriteString("]\n")
+			for j := 0; j < len(sv.Content); j += 2 {
+				kk, vv := sv.Content[j], sv.Content[j+1]
+				if kk.Kind != yaml.ScalarNode || vv.Kind != yaml.ScalarNode {
+					return "", fmt.Errorf("wsl_conf.content.%s: expected scalar key/value at line %d", sk.Value, kk.Line)
+				}
+				b.WriteString(kk.Value)
+				b.WriteString(" = ")
+				b.WriteString(vv.Value)
+				b.WriteString("\n")
+			}
+		}
+		return b.String(), nil
+	default:
+		return "", fmt.Errorf("wsl_conf.content: expected a string or a mapping of sections, got %s", yamlKindName(v.Kind))
+	}
+}
+
+func yamlKindName(k yaml.Kind) string {
+	switch k {
+	case yaml.DocumentNode:
+		return "document"
+	case yaml.SequenceNode:
+		return "sequence"
+	case yaml.MappingNode:
+		return "mapping"
+	case yaml.ScalarNode:
+		return "scalar"
+	case yaml.AliasNode:
+		return "alias"
+	}
+	return "unknown"
 }
 
 // Validate checks the profile for internal consistency without performing
@@ -214,6 +352,13 @@ func LoadProfile(path string) (*Profile, error) {
 		}
 		p.Files[i].Src = src
 	}
+
+	// Expand environment variables in wsl_conf content so users can write
+	// e.g. `default=$USER` or `default=%USERNAME%` and have it resolved at
+	// profile-load time on the host.
+	if p.WslConf != nil && p.WslConf.Content != "" {
+		p.WslConf.Content = ExpandEnvVars(p.WslConf.Content)
+	}
 	return &p, nil
 }
 
@@ -234,23 +379,7 @@ func ExpandHostPath(p string) string {
 		return p
 	}
 
-	// Expand %NAME% (Windows). Leave unknown vars untouched.
-	p = winEnvVarRE.ReplaceAllStringFunc(p, func(m string) string {
-		name := m[1 : len(m)-1]
-		if v, ok := os.LookupEnv(name); ok {
-			return v
-		}
-		return m
-	})
-
-	// Expand $NAME / ${NAME} (POSIX). os.Expand returns "" for missing vars;
-	// preserve the original token instead.
-	p = os.Expand(p, func(name string) string {
-		if v, ok := os.LookupEnv(name); ok {
-			return v
-		}
-		return "${" + name + "}"
-	})
+	p = ExpandEnvVars(p)
 
 	// Expand a leading ~ or ~/ (or ~\ on Windows) to the user's home dir.
 	if p == "~" || strings.HasPrefix(p, "~/") || strings.HasPrefix(p, `~\`) {
@@ -264,4 +393,38 @@ func ExpandHostPath(p string) string {
 	}
 
 	return p
+}
+
+// ExpandEnvVars expands environment variable references in s without doing
+// any path-specific processing. It supports:
+//   - Windows %NAME% references (e.g. %USERPROFILE%, %APPDATA%)
+//   - POSIX $NAME / ${NAME} references
+//
+// Unknown variables are left as-is (Windows tokens stay %FOO%; POSIX tokens
+// are rewritten to ${FOO}) so a missing variable surfaces as an obvious
+// unexpanded token rather than silently expanding to an empty string.
+func ExpandEnvVars(s string) string {
+	if s == "" {
+		return s
+	}
+
+	// Expand %NAME% (Windows). Leave unknown vars untouched.
+	s = winEnvVarRE.ReplaceAllStringFunc(s, func(m string) string {
+		name := m[1 : len(m)-1]
+		if v, ok := os.LookupEnv(name); ok {
+			return v
+		}
+		return m
+	})
+
+	// Expand $NAME / ${NAME} (POSIX). os.Expand returns "" for missing vars;
+	// preserve the original token instead.
+	s = os.Expand(s, func(name string) string {
+		if v, ok := os.LookupEnv(name); ok {
+			return v
+		}
+		return "${" + name + "}"
+	})
+
+	return s
 }

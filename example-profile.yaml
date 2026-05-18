@@ -68,3 +68,39 @@ deletes:
 init_cmds:
   - apt-get update -y
   - apt-get install -y curl git vim
+
+# Optional: write /etc/wsl.conf into the rootfs tar before `wsl --import`.
+# This is syntactic sugar over `copies` that additionally understands the
+# wsl.conf INI format. `mode` is either:
+#   merge   (default) – merge `content` with any existing /etc/wsl.conf
+#                       section- and key-wise; user keys override existing
+#                       keys, new sections/keys are appended.
+#   replace          – discard any existing /etc/wsl.conf and write
+#                       `content` verbatim.
+wsl_conf:
+  mode: merge
+  content: |
+    [boot]
+    systemd=true
+
+    [user]
+    # %VAR%, $VAR and ${VAR} are expanded against the host's environment
+    # at profile-load time (unknown variables are left as-is).
+    default=%USERNAME%
+
+    [interop]
+    appendWindowsPath=false
+
+# `content` can also be expressed as a YAML mapping of sections instead of a
+# raw INI string. Both forms produce exactly the same /etc/wsl.conf, and
+# %VAR% / $VAR / ${VAR} expansion is applied to the rendered text either way.
+#
+# wsl_conf:
+#   mode: merge
+#   content:
+#     boot:
+#       systemd: true
+#     user:
+#       default: "%USERNAME%"
+#     interop:
+#       appendWindowsPath: false

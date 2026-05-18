@@ -14,6 +14,7 @@ require (
 	github.com/ubuntu/gowsl v0.0.0-20251112191800-0ef2623cc8fb
 	github.com/urfave/cli/v3 v3.9.0
 	golang.org/x/term v0.42.0
+	gopkg.in/ini.v1 v1.67.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
