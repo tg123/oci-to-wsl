@@ -50,13 +50,16 @@ deletes:
 # user's home directory overlays onto the directory created here. `uid` and
 # `gid` are auto-allocated from 1000+ when omitted. `password_hash` is
 # written verbatim into /etc/shadow; generate one with e.g.
-# `openssl passwd -6`. Supplementary `groups` that don't exist in the image
+# `openssl passwd -6`. Alternatively, set `password_plain` and the tool
+# will hash it with SHA-512 crypt before writing (mutually exclusive with
+# `password_hash`). Supplementary `groups` that don't exist in the image
 # are silently skipped so a profile stays portable across base images.
 users:
   - name: alice
     shell: /bin/bash
     gecos: "Alice Example"
     groups: [sudo]
+    password_plain: "change-me"
   - name: bob
     uid: 1500
     home: /srv/bob

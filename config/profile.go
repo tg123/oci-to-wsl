@@ -77,8 +77,16 @@ type User struct {
 	// PasswordHash is written verbatim into the /etc/shadow password
 	// field. An empty value disables password login by writing "!".
 	// Supply a hash produced by e.g. `openssl passwd -6` to set a real
-	// password; plaintext passwords are intentionally not supported.
+	// password. Use PasswordPlain instead if you'd rather let the tool
+	// hash a plaintext value (mutually exclusive with PasswordHash).
 	PasswordHash string `yaml:"password_hash"`
+
+	// PasswordPlain is a plaintext password. When set, it is hashed
+	// with SHA-512 crypt ($6$) and a random 16-byte salt before being
+	// written into /etc/shadow. Mutually exclusive with PasswordHash.
+	// Prefer PasswordHash in checked-in profiles so the plaintext does
+	// not live on disk.
+	PasswordPlain string `yaml:"password_plain"`
 
 	// NoCreateHome, when true, suppresses creation of the home
 	// directory entry in the rootfs tar. The default (false) emits a

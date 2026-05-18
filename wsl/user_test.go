@@ -320,6 +320,48 @@ func TestApplyUsers_ReplacesStaleShadowEntry(t *testing.T) {
 	}
 }
 
+func TestApplyUsers_PasswordPlainHashedIntoShadow(t *testing.T) {
+	// PasswordPlain should be hashed with SHA-512 crypt ($6$) before
+	// hitting /etc/shadow — and never appear there literally.
+	tarPath := baseAccountTar(t)
+	if err := wsl.ApplyUsers(tarPath, []wsl.UserEntry{{Name: "alice", PasswordPlain: "s3cret!"}}); err != nil {
+		t.Fatalf("ApplyUsers: %v", err)
+	}
+	got := readTar(t, tarPath)
+	shadowBody := string(got["etc/shadow"].body)
+	if strings.Contains(shadowBody, "s3cret!") {
+		t.Fatalf("plaintext leaked into /etc/shadow: %q", shadowBody)
+	}
+	// Find alice's shadow line and verify it carries a $6$ SHA-512 crypt hash.
+	var aliceLine string
+	for _, l := range strings.Split(strings.TrimRight(shadowBody, "\n"), "\n") {
+		f := strings.SplitN(l, ":", 2)
+		if len(f) >= 1 && f[0] == "alice" {
+			aliceLine = l
+			break
+		}
+	}
+	if aliceLine == "" {
+		t.Fatalf("alice not in /etc/shadow: %q", shadowBody)
+	}
+	parts := strings.Split(aliceLine, ":")
+	if len(parts) < 2 || !strings.HasPrefix(parts[1], "$6$") {
+		t.Fatalf("expected SHA-512 crypt hash ($6$...), got %q", aliceLine)
+	}
+}
+
+func TestApplyUsers_PasswordPlainAndHashMutuallyExclusive(t *testing.T) {
+	tarPath := baseAccountTar(t)
+	err := wsl.ApplyUsers(tarPath, []wsl.UserEntry{{
+		Name:          "alice",
+		PasswordHash:  "$6$abc$def",
+		PasswordPlain: "p",
+	}})
+	if err == nil {
+		t.Fatal("expected error when both password_hash and password_plain are set")
+	}
+}
+
 func TestApplyUsers_EmptyIsNoop(t *testing.T) {
 	tarPath := baseAccountTar(t)
 	before := readTar(t, tarPath)

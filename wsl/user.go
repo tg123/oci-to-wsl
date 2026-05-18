@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/GehirnInc/crypt/sha512_crypt"
 )
 
 // UserEntry describes a Linux user to create inside the imported WSL
@@ -54,6 +56,13 @@ type UserEntry struct {
 	// writing "!". To set a real password, supply a hash produced by
 	// e.g. `openssl passwd -6`.
 	PasswordHash string
+
+	// PasswordPlain is a plaintext password. When set, ApplyUsers hashes
+	// it with SHA-512 crypt ($6$) using a random 16-byte salt and writes
+	// the result into /etc/shadow. It is mutually exclusive with
+	// PasswordHash. Prefer PasswordHash for production profiles so the
+	// plaintext never appears in the YAML on disk.
+	PasswordPlain string
 
 	// NoCreateHome, when true, suppresses creation of the home directory
 	// entry in the rootfs tar. The default (false) emits a directory
@@ -129,6 +138,23 @@ func ApplyUsers(tarPath string, users []UserEntry) error {
 			if err := validateAccountField("password_hash", u.PasswordHash); err != nil {
 				return fmt.Errorf("user %q: %w", name, err)
 			}
+		}
+		if u.PasswordPlain != "" {
+			if u.PasswordHash != "" {
+				return fmt.Errorf("user %q: 'password_hash' and 'password_plain' are mutually exclusive", name)
+			}
+			hash, herr := hashPasswordSHA512(u.PasswordPlain)
+			if herr != nil {
+				return fmt.Errorf("user %q: hashing password_plain: %w", name, herr)
+			}
+			// Sanity-check the generated hash doesn't carry a record
+			// separator (the crypt(3) $6$ alphabet doesn't include any,
+			// but stay defensive in case of a library change).
+			if err := validateAccountField("password_hash", hash); err != nil {
+				return fmt.Errorf("user %q: %w", name, err)
+			}
+			u.PasswordHash = hash
+			u.PasswordPlain = ""
 		}
 	}
 
@@ -393,6 +419,15 @@ func mergeUsers(passwd, shadow, group accountFile, users []UserEntry) (
 	newShadow = bodyWith(shadow, joinLines(shadowLines), tarEtcShadow, 0o640)
 	newGroup = bodyWith(group, joinLines(groupLines), tarEtcGroup, 0o644)
 	return
+}
+
+// hashPasswordSHA512 produces a SHA-512 crypt ($6$) hash suitable for the
+// password field of /etc/shadow. Passing a nil/empty salt causes the
+// underlying crypter to generate a random 16-byte salt at the default
+// round count, matching `openssl passwd -6`.
+func hashPasswordSHA512(plain string) (string, error) {
+	c := sha512_crypt.New()
+	return c.Generate([]byte(plain), nil)
 }
 
 // validateAccountField rejects characters that would corrupt the

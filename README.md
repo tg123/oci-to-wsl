@@ -105,6 +105,7 @@ users:                           # optional – Linux users created by editing /
     gecos: "Alice Example"       # optional comment / full name
     groups: [sudo, wheel]        # optional; supplementary groups (missing groups silently skipped)
     password_hash: "$6$..."      # optional; written verbatim into /etc/shadow (e.g. `openssl passwd -6`)
+    password_plain: "s3cret!"    # optional; hashed with SHA-512 crypt before write (mutually exclusive with password_hash)
     no_create_home: false        # optional; when true, suppresses the home directory tar entry
 init_cmds:                       # optional – run inside the new distro after import
   - apt-get update -y

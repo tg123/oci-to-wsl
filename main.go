@@ -224,15 +224,16 @@ func loadProfile(profile *config.Profile, saveTar string) error {
 				return fmt.Errorf("profile users: 'name' is required")
 			}
 			usrs = append(usrs, wsl.UserEntry{
-				Name:         u.Name,
-				UID:          u.UID,
-				GID:          u.GID,
-				Home:         u.Home,
-				Shell:        u.Shell,
-				Gecos:        u.Gecos,
-				Groups:       u.Groups,
-				PasswordHash: u.PasswordHash,
-				NoCreateHome: u.NoCreateHome,
+				Name:          u.Name,
+				UID:           u.UID,
+				GID:           u.GID,
+				Home:          u.Home,
+				Shell:         u.Shell,
+				Gecos:         u.Gecos,
+				Groups:        u.Groups,
+				PasswordHash:  u.PasswordHash,
+				PasswordPlain: u.PasswordPlain,
+				NoCreateHome:  u.NoCreateHome,
 			})
 		}
 		if err := wsl.ApplyUsers(tarPath, usrs); err != nil {
