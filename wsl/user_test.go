@@ -148,7 +148,7 @@ func TestApplyUsers_ExplicitFieldsAndExtraGroups(t *testing.T) {
 
 	// sudo group should include bob; doesnotexist must NOT be created.
 	sudo := findGroupLine(got["etc/group"].body, "sudo")
-	if sudo == nil || len(sudo) < 4 {
+	if len(sudo) < 4 {
 		t.Fatalf("sudo group malformed: %v", sudo)
 	}
 	if !contains(strings.Split(sudo[3], ","), "bob") {

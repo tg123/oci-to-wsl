@@ -172,6 +172,43 @@ init_cmds:
 				{name: "init_read_asset", script: "cat /tmp/assets-hello", wantSub: "hello-from-host"},
 			},
 		},
+		{
+			name:   "profile_users",
+			distro: "e2e-users",
+			setup: func(t *testing.T, workDir string) []string {
+				profile := `name: e2e-users
+image: alpine:latest
+users:
+  - name: alice
+    uid: 1500
+    gid: 1500
+    shell: /bin/sh
+    gecos: "Alice E2E"
+    groups: [wheel, doesnotexist]
+    password_hash: "!"
+  - name: bob
+    shell: /bin/sh
+`
+				profilePath := filepath.Join(workDir, "profile.yaml")
+				mustWrite(t, profilePath, profile)
+
+				installDir := filepath.Join(workDir, "wsl-e2e-users")
+				return []string{
+					"--profile", profilePath,
+					"--dir", installDir,
+				}
+			},
+			verifies: []verify{
+				{name: "alice_passwd", script: "getent passwd alice", wantSub: "alice:x:1500:1500:Alice E2E:/home/alice:/bin/sh"},
+				{name: "alice_home_exists", script: "test -d /home/alice && stat -c '%u:%g:%a' /home/alice", want: "1500:1500:700"},
+				{name: "alice_shadow", script: "grep '^alice:' /etc/shadow", wantSub: "alice:!:"},
+				{name: "alice_in_wheel", script: "getent group wheel", wantSub: "alice"},
+				{name: "doesnotexist_not_created", script: "getent group doesnotexist; true", want: ""},
+				{name: "bob_passwd", script: "getent passwd bob", wantSub: "bob:x:"},
+				{name: "bob_home_owned", script: "stat -c '%U' /home/bob", want: "bob"},
+				{name: "alice_can_su", script: "su -s /bin/sh alice -c 'id -un'", want: "alice"},
+			},
+		},
 	}
 
 	for _, tc := range cases {

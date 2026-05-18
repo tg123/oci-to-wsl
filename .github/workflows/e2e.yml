@@ -51,7 +51,7 @@ jobs:
         if: always()
         shell: pwsh
         run: |
-          foreach ($d in @('e2e-alpine','e2e-copy')) {
+          foreach ($d in @('e2e-alpine','e2e-copy','e2e-users')) {
             wsl.exe --unregister $d 2>$null
           }
           exit 0
