@@ -404,5 +404,3 @@ func ExpandHostPath(p string) string {
 	return p
 }
 
-
-
