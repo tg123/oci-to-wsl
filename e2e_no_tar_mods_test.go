@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -46,7 +47,7 @@ copies:
     dst: /opt/marker.txt
     mode: "0644"
 deletes:
-  - /etc/issue
+  - /etc/alpine-release
 `
 	profilePath := filepath.Join(workDir, "profile.yaml")
 	mustWrite(t, profilePath, profile)
@@ -65,14 +66,17 @@ deletes:
 		} else if !strings.Contains(string(body), "hello-from-host") {
 			t.Fatalf("opt/marker.txt content unexpected: %q", string(body))
 		}
-		if _, ok := entries["etc/issue"]; ok {
-			t.Fatalf("etc/issue still present in default tar (deletes were not applied)")
+		if _, ok := entries["etc/alpine-release"]; ok {
+			t.Fatalf("etc/alpine-release still present in default tar (deletes were not applied)")
 		}
 	})
 
 	t.Run("no_tar_mods_skips_copies_and_deletes", func(t *testing.T) {
 		tarPath := filepath.Join(workDir, "raw.tar")
-		cmd := exec.Command(bin, "--profile", profilePath, "--save-tar", tarPath)
+		// Run with --loglevel error so the stderr skip notice assertion
+		// actually proves the message bypasses slog level filtering
+		// (slog warn/info would be suppressed at this level).
+		cmd := exec.Command(bin, "--loglevel", "error", "--profile", profilePath, "--save-tar", tarPath)
 		cmd.Dir = workDir
 		cmd.Env = append(os.Environ(), "OCI_TO_WSL_NO_TAR_MODS=1")
 		out, err := cmd.CombinedOutput()
@@ -89,8 +93,8 @@ deletes:
 		if _, ok := entries["opt/marker.txt"]; ok {
 			t.Fatalf("opt/marker.txt unexpectedly present in raw tar (copies should be skipped)")
 		}
-		if _, ok := entries["etc/issue"]; !ok {
-			t.Fatalf("etc/issue missing from raw tar (deletes should be skipped); entries:\n%s", strings.Join(sortedKeys(entries), "\n"))
+		if _, ok := entries["etc/alpine-release"]; !ok {
+			t.Fatalf("etc/alpine-release missing from raw tar (deletes should be skipped); entries:\n%s", strings.Join(sortedKeys(entries), "\n"))
 		}
 	})
 }
@@ -144,5 +148,6 @@ func sortedKeys(m map[string][]byte) []string {
 	for k := range m {
 		out = append(out, k)
 	}
+	sort.Strings(out)
 	return out
 }
