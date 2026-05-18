@@ -320,6 +320,48 @@ func TestApplyUsers_ReplacesStaleShadowEntry(t *testing.T) {
 	}
 }
 
+func TestApplyUsers_RemovesDuplicateStaleShadowEntries(t *testing.T) {
+	// If /etc/shadow ships multiple stale entries for the same name,
+	// ApplyUsers must replace the first (so a parser that returns the
+	// first match still sees the new hash) and drop the rest, leaving
+	// exactly one entry for the name.
+	dir := t.TempDir()
+	tarPath := filepath.Join(dir, "rootfs.tar")
+	writeTar(t, tarPath, []tarEntry{
+		{hdr: tar.Header{Name: "etc/passwd", Mode: 0o644, Typeflag: tar.TypeReg},
+			body: []byte("root:x:0:0:root:/root:/bin/sh\n")},
+		{hdr: tar.Header{Name: "etc/shadow", Mode: 0o640, Typeflag: tar.TypeReg},
+			body: []byte("root:*:::::::\ndup:$6$a$a:::::::\nother:*:::::::\ndup:$6$b$b:::::::\n")},
+		{hdr: tar.Header{Name: "etc/group", Mode: 0o644, Typeflag: tar.TypeReg},
+			body: []byte("root:x:0:\n")},
+	})
+	if err := wsl.ApplyUsers(tarPath, []wsl.UserEntry{{Name: "dup", PasswordHash: "$6$new$new"}}); err != nil {
+		t.Fatalf("ApplyUsers: %v", err)
+	}
+	got := readTar(t, tarPath)
+	shadowBody := string(got["etc/shadow"].body)
+	if strings.Contains(shadowBody, "$6$a$a") || strings.Contains(shadowBody, "$6$b$b") {
+		t.Fatalf("stale shadow hashes not fully removed, body=%q", shadowBody)
+	}
+	count := 0
+	for _, l := range strings.Split(strings.TrimRight(shadowBody, "\n"), "\n") {
+		f := strings.SplitN(l, ":", 2)
+		if len(f) > 0 && f[0] == "dup" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly one shadow entry for 'dup', got %d (body=%q)", count, shadowBody)
+	}
+	if !strings.Contains(shadowBody, "dup:$6$new$new:::::::") {
+		t.Fatalf("expected new shadow entry for dup, body=%q", shadowBody)
+	}
+	// And the other unrelated entry must still be present.
+	if !strings.Contains(shadowBody, "other:*:::::::") {
+		t.Fatalf("unrelated shadow entry was lost, body=%q", shadowBody)
+	}
+}
+
 func TestApplyUsers_PasswordPlainHashedIntoShadow(t *testing.T) {
 	// PasswordPlain should be hashed with SHA-512 crypt ($6$) before
 	// hitting /etc/shadow — and never appear there literally.

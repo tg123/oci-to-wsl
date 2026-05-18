@@ -262,14 +262,17 @@ func mergeUsers(passwd, shadow, group accountFile, users []UserEntry) (
 			existingPasswd[fields[0]] = uid
 		}
 	}
-	shadowHas := map[string]int{}
+	shadowHas := map[string][]int{}
 	for i, l := range shadowLines {
 		fields := strings.SplitN(l, ":", 2)
 		if len(fields) < 1 {
 			continue
 		}
-		shadowHas[fields[0]] = i
+		shadowHas[fields[0]] = append(shadowHas[fields[0]], i)
 	}
+	// Sentinel used to mark stale duplicate /etc/shadow lines that
+	// must be dropped before re-serialising the file.
+	const shadowTombstone = "\x00oci-to-wsl-deleted\x00"
 	existingGroups := map[string]int{}
 	groupHas := map[string]struct{}{}
 	usedGIDs := map[int]struct{}{}
@@ -370,15 +373,22 @@ func mergeUsers(passwd, shadow, group accountFile, users []UserEntry) (
 		}
 		// /etc/shadow: name:hash:lastchg:min:max:warn:inactive:expire:reserved
 		shadowLine := fmt.Sprintf("%s:%s:::::::", name, hash)
-		if idx, dup := shadowHas[name]; dup {
-			// Replace any stale shadow entry so passwd and shadow stay
+		if idxs, dup := shadowHas[name]; dup && len(idxs) > 0 {
+			// Replace any stale shadow entries so passwd and shadow stay
 			// consistent — otherwise an image that ships a placeholder
 			// shadow record (e.g. from a deleted user) would silently
-			// keep its old hash/aging fields under the new account.
-			shadowLines[idx] = shadowLine
+			// keep its old hash/aging fields under the new account. If
+			// multiple stale entries exist for the same name, keep one
+			// (the first) and tombstone the rest so a parser that
+			// returns the first match still sees the new hash.
+			shadowLines[idxs[0]] = shadowLine
+			for _, i := range idxs[1:] {
+				shadowLines[i] = shadowTombstone
+			}
+			shadowHas[name] = []int{idxs[0]}
 		} else {
 			shadowLines = append(shadowLines, shadowLine)
-			shadowHas[name] = len(shadowLines) - 1
+			shadowHas[name] = []int{len(shadowLines) - 1}
 		}
 
 		// Append the new user as a member of every supplementary group
@@ -413,6 +423,18 @@ func mergeUsers(passwd, shadow, group accountFile, users []UserEntry) (
 		}
 
 		resolved = append(resolved, resolvedUser{in: u, uid: uid, gid: gid})
+	}
+
+	// Drop any tombstoned shadow lines (stale duplicates we replaced).
+	if len(shadowLines) > 0 {
+		filtered := shadowLines[:0]
+		for _, l := range shadowLines {
+			if l == shadowTombstone {
+				continue
+			}
+			filtered = append(filtered, l)
+		}
+		shadowLines = filtered
 	}
 
 	newPasswd = bodyWith(passwd, joinLines(passwdLines), tarEtcPasswd, 0o644)

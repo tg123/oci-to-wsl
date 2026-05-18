@@ -193,11 +193,17 @@ func LoadProfile(path string) (*Profile, error) {
 // NAME must be at least one non-% character to avoid matching a literal "%%".
 var winEnvVarRE = regexp.MustCompile(`%([^%]+)%`)
 
+// posixEnvVarRE matches POSIX-style $NAME and ${NAME} environment variable
+// references. NAME starts with a letter or underscore and continues with
+// alphanumerics/underscores, matching the shell convention.
+var posixEnvVarRE = regexp.MustCompile(`\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))`)
+
 // ExpandEnvVars expands Windows %NAME% and POSIX $NAME / ${NAME} environment
-// variable references in s. Unknown variables are left untouched so a typo
-// surfaces as a downstream error rather than silently becoming an empty
-// string. Unlike ExpandHostPath it does not expand a leading ~, since user
-// fields (login names, gecos, etc.) are not host paths.
+// variable references in s. Unknown variables are left untouched verbatim
+// (e.g. a typo'd "$FOO" stays "$FOO", not "${FOO}") so they surface as a
+// downstream error rather than silently becoming an empty string. Unlike
+// ExpandHostPath it does not expand a leading ~, since user fields (login
+// names, gecos, etc.) are not host paths.
 func ExpandEnvVars(s string) string {
 	if s == "" {
 		return s
@@ -209,11 +215,17 @@ func ExpandEnvVars(s string) string {
 		}
 		return m
 	})
-	s = os.Expand(s, func(name string) string {
+	s = posixEnvVarRE.ReplaceAllStringFunc(s, func(m string) string {
+		sub := posixEnvVarRE.FindStringSubmatch(m)
+		// sub[1] is the braced name; sub[2] is the bare name.
+		name := sub[1]
+		if name == "" {
+			name = sub[2]
+		}
 		if v, ok := os.LookupEnv(name); ok {
 			return v
 		}
-		return "${" + name + "}"
+		return m
 	})
 	return s
 }

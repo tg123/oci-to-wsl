@@ -215,12 +215,12 @@ func loadProfile(profile *config.Profile, saveTar string) error {
 	// rootfs tar exactly as exported from the image (most useful with
 	// --save-tar when you want an unmodified artifact).
 	skipTarMods := isTarModsDisabled()
-	if skipTarMods && (len(profile.Deletes) > 0 || len(profile.Copies) > 0) {
+	if skipTarMods && (len(profile.Deletes) > 0 || len(profile.Copies) > 0 || len(profile.Users) > 0) {
 		// Print directly to stderr so this notice is not suppressed
 		// by --loglevel error; it reflects a user-requested
 		// behavioural change that should always be visible.
-		fmt.Fprintf(os.Stderr, "OCI_TO_WSL_NO_TAR_MODS is set; skipping profile 'deletes' (%d) and 'copies' (%d) tar modifications\n",
-			len(profile.Deletes), len(profile.Copies))
+		fmt.Fprintf(os.Stderr, "OCI_TO_WSL_NO_TAR_MODS is set; skipping profile 'deletes' (%d), 'users' (%d) and 'copies' (%d) tar modifications\n",
+			len(profile.Deletes), len(profile.Users), len(profile.Copies))
 	}
 	if !skipTarMods && len(profile.Deletes) > 0 {
 		if err := wsl.ApplyDeletes(tarPath, profile.Deletes); err != nil {
@@ -233,7 +233,7 @@ func loadProfile(profile *config.Profile, saveTar string) error {
 	// deletes (so a profile can drop upstream account files and start
 	// from a clean slate) and before copies (so a copy targeting the
 	// new home directory overlays onto the dir created here).
-	if len(profile.Users) > 0 {
+	if !skipTarMods && len(profile.Users) > 0 {
 		usrs := make([]wsl.UserEntry, 0, len(profile.Users))
 		for _, u := range profile.Users {
 			if strings.TrimSpace(u.Name) == "" {

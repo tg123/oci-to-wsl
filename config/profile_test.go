@@ -180,9 +180,12 @@ func TestExpandHostPath_TildeAndUnknownVars(t *testing.T) {
 		t.Errorf("~/sub/file.txt: got %q, want %q", got, want)
 	}
 
-	// Unknown $VAR and ${VAR} are preserved.
-	if got := config.ExpandHostPath("/a/$OCI_TO_WSL_DEFINITELY_UNSET/b"); got != "/a/${OCI_TO_WSL_DEFINITELY_UNSET}/b" {
+	// Unknown $VAR and ${VAR} are preserved in their original form.
+	if got := config.ExpandHostPath("/a/$OCI_TO_WSL_DEFINITELY_UNSET/b"); got != "/a/$OCI_TO_WSL_DEFINITELY_UNSET/b" {
 		t.Errorf("unknown $VAR not preserved: got %q", got)
+	}
+	if got := config.ExpandHostPath("/a/${OCI_TO_WSL_DEFINITELY_UNSET}/b"); got != "/a/${OCI_TO_WSL_DEFINITELY_UNSET}/b" {
+		t.Errorf("unknown ${VAR} not preserved: got %q", got)
 	}
 }
 
