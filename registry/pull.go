@@ -204,8 +204,12 @@ func normalizeTarPaths(r io.Reader, w io.Writer) error {
 			}
 		}
 	}
+	if err := tw.Close(); err != nil {
+		slog.Debug("normalizing rootfs tar paths failed on close", "entries", entries, "rewritten", rewritten, "error", err)
+		return err
+	}
 	slog.Debug("normalized rootfs tar paths", "entries", entries, "rewritten", rewritten)
-	return tw.Close()
+	return nil
 }
 
 func humanBytes(n int64) string {
