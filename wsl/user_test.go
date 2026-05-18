@@ -237,6 +237,89 @@ func TestApplyUsers_InjectionCharsRejected(t *testing.T) {
 	}
 }
 
+func TestApplyUsers_InvalidHomePathRejected(t *testing.T) {
+	// Home is documented as an absolute POSIX path; relative or
+	// escape-out-of-rootfs values would corrupt the /etc/passwd record
+	// and (with NoCreateHome=false) the tar layout too. Reject up front
+	// regardless of NoCreateHome, since the same value still lands in
+	// /etc/passwd either way.
+	cases := []struct {
+		name string
+		u    wsl.UserEntry
+	}{
+		{"relative_home", wsl.UserEntry{Name: "a", Home: "home/a"}},
+		{"dot_home", wsl.UserEntry{Name: "c", Home: "/./"}},
+		{"relative_home_no_create", wsl.UserEntry{Name: "d", Home: "tmp", NoCreateHome: true}},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			tarPath := baseAccountTar(t)
+			if err := wsl.ApplyUsers(tarPath, []wsl.UserEntry{tc.u}); err == nil {
+				t.Fatalf("expected ApplyUsers to reject %+v", tc.u)
+			}
+		})
+	}
+}
+
+func TestApplyUsers_DuplicateNameDetectedWithNonNumericUID(t *testing.T) {
+	// If an existing /etc/passwd line has a non-numeric uid, dedup must
+	// still catch a request for the same login name; otherwise a profile
+	// could end up with two records for the same user.
+	dir := t.TempDir()
+	tarPath := filepath.Join(dir, "rootfs.tar")
+	writeTar(t, tarPath, []tarEntry{
+		{hdr: tar.Header{Name: "etc/passwd", Mode: 0o644, Typeflag: tar.TypeReg},
+			body: []byte("weird:x:notanumber:0::/:/bin/sh\n")},
+		{hdr: tar.Header{Name: "etc/shadow", Mode: 0o640, Typeflag: tar.TypeReg},
+			body: []byte("weird:*:::::::\n")},
+		{hdr: tar.Header{Name: "etc/group", Mode: 0o644, Typeflag: tar.TypeReg},
+			body: []byte("weird:x:bogus:\n")},
+	})
+	if err := wsl.ApplyUsers(tarPath, []wsl.UserEntry{{Name: "weird"}}); err == nil {
+		t.Fatal("expected error: duplicate name should be caught even when existing uid is non-numeric")
+	}
+}
+
+func TestApplyUsers_ReplacesStaleShadowEntry(t *testing.T) {
+	// A passwd entry can be missing while shadow still carries a stale
+	// record for the same name (e.g. partial image cleanup). The new
+	// hash must replace the stale one so passwd and shadow stay
+	// consistent.
+	dir := t.TempDir()
+	tarPath := filepath.Join(dir, "rootfs.tar")
+	writeTar(t, tarPath, []tarEntry{
+		{hdr: tar.Header{Name: "etc/passwd", Mode: 0o644, Typeflag: tar.TypeReg},
+			body: []byte("root:x:0:0:root:/root:/bin/sh\n")},
+		{hdr: tar.Header{Name: "etc/shadow", Mode: 0o640, Typeflag: tar.TypeReg},
+			body: []byte("root:*:::::::\nstale:$6$old$old:::::::\n")},
+		{hdr: tar.Header{Name: "etc/group", Mode: 0o644, Typeflag: tar.TypeReg},
+			body: []byte("root:x:0:\n")},
+	})
+	if err := wsl.ApplyUsers(tarPath, []wsl.UserEntry{{Name: "stale", PasswordHash: "$6$new$new"}}); err != nil {
+		t.Fatalf("ApplyUsers: %v", err)
+	}
+	got := readTar(t, tarPath)
+	shadowBody := string(got["etc/shadow"].body)
+	if strings.Contains(shadowBody, "$6$old$old") {
+		t.Fatalf("stale shadow hash should have been replaced, body=%q", shadowBody)
+	}
+	if !strings.Contains(shadowBody, "stale:$6$new$new:::::::") {
+		t.Fatalf("expected new shadow entry for stale, body=%q", shadowBody)
+	}
+	// And only one entry for that name should remain.
+	count := 0
+	for _, l := range strings.Split(strings.TrimRight(shadowBody, "\n"), "\n") {
+		f := strings.SplitN(l, ":", 2)
+		if len(f) > 0 && f[0] == "stale" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly one shadow entry for 'stale', got %d (body=%q)", count, shadowBody)
+	}
+}
+
 func TestApplyUsers_EmptyIsNoop(t *testing.T) {
 	tarPath := baseAccountTar(t)
 	before := readTar(t, tarPath)

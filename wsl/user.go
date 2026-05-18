@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -98,6 +100,9 @@ func ApplyUsers(tarPath string, users []UserEntry) error {
 		u.Name = name
 		if u.Home != "" {
 			if err := validateAccountField("home", u.Home); err != nil {
+				return fmt.Errorf("user %q: %w", name, err)
+			}
+			if err := validateHomePath(u.Home); err != nil {
 				return fmt.Errorf("user %q: %w", name, err)
 			}
 		}
@@ -216,26 +221,31 @@ func mergeUsers(passwd, shadow, group accountFile, users []UserEntry) (
 	groupLines := splitLines(group.body)
 
 	existingPasswd := map[string]int{}
+	passwdHas := map[string]struct{}{}
 	usedUIDs := map[int]struct{}{}
 	for _, l := range passwdLines {
 		fields := strings.SplitN(l, ":", 7)
 		if len(fields) < 3 {
 			continue
 		}
+		// Record the name unconditionally so a non-numeric uid line
+		// can't be used to smuggle a duplicate login through dedup.
+		passwdHas[fields[0]] = struct{}{}
 		if uid, perr := strconv.Atoi(fields[2]); perr == nil {
 			usedUIDs[uid] = struct{}{}
 			existingPasswd[fields[0]] = uid
 		}
 	}
-	shadowHas := map[string]struct{}{}
-	for _, l := range shadowLines {
+	shadowHas := map[string]int{}
+	for i, l := range shadowLines {
 		fields := strings.SplitN(l, ":", 2)
 		if len(fields) < 1 {
 			continue
 		}
-		shadowHas[fields[0]] = struct{}{}
+		shadowHas[fields[0]] = i
 	}
 	existingGroups := map[string]int{}
+	groupHas := map[string]struct{}{}
 	usedGIDs := map[int]struct{}{}
 	groupLineIdx := map[string]int{}
 	for i, l := range groupLines {
@@ -243,6 +253,7 @@ func mergeUsers(passwd, shadow, group accountFile, users []UserEntry) (
 		if len(fields) < 3 {
 			continue
 		}
+		groupHas[fields[0]] = struct{}{}
 		if gid, perr := strconv.Atoi(fields[2]); perr == nil {
 			usedGIDs[gid] = struct{}{}
 			existingGroups[fields[0]] = gid
@@ -267,7 +278,7 @@ func mergeUsers(passwd, shadow, group accountFile, users []UserEntry) (
 	resolved = make([]resolvedUser, 0, len(users))
 	for _, u := range users {
 		name := u.Name
-		if _, ok := existingPasswd[name]; ok {
+		if _, ok := passwdHas[name]; ok {
 			err = fmt.Errorf("user %q already exists in /etc/passwd", name)
 			return
 		}
@@ -304,12 +315,13 @@ func mergeUsers(passwd, shadow, group accountFile, users []UserEntry) (
 			}
 		}
 		if !gidHasEntry {
-			if _, nameTaken := existingGroups[name]; nameTaken {
+			if _, nameTaken := groupHas[name]; nameTaken {
 				err = fmt.Errorf("user %q: cannot create primary group (name already exists with a different gid)", name)
 				return
 			}
 			groupLines = append(groupLines, fmt.Sprintf("%s:x:%d:", name, gid))
 			existingGroups[name] = gid
+			groupHas[name] = struct{}{}
 			usedGIDs[gid] = struct{}{}
 			groupLineIdx[name] = len(groupLines) - 1
 		}
@@ -324,15 +336,23 @@ func mergeUsers(passwd, shadow, group accountFile, users []UserEntry) (
 		}
 		passwdLines = append(passwdLines, fmt.Sprintf("%s:x:%d:%d:%s:%s:%s", name, uid, gid, u.Gecos, home, shell))
 		existingPasswd[name] = uid
+		passwdHas[name] = struct{}{}
 
 		hash := u.PasswordHash
 		if hash == "" {
 			hash = "!"
 		}
-		if _, dup := shadowHas[name]; !dup {
-			// /etc/shadow: name:hash:lastchg:min:max:warn:inactive:expire:reserved
-			shadowLines = append(shadowLines, fmt.Sprintf("%s:%s:::::::", name, hash))
-			shadowHas[name] = struct{}{}
+		// /etc/shadow: name:hash:lastchg:min:max:warn:inactive:expire:reserved
+		shadowLine := fmt.Sprintf("%s:%s:::::::", name, hash)
+		if idx, dup := shadowHas[name]; dup {
+			// Replace any stale shadow entry so passwd and shadow stay
+			// consistent — otherwise an image that ships a placeholder
+			// shadow record (e.g. from a deleted user) would silently
+			// keep its old hash/aging fields under the new account.
+			shadowLines[idx] = shadowLine
+		} else {
+			shadowLines = append(shadowLines, shadowLine)
+			shadowHas[name] = len(shadowLines) - 1
 		}
 
 		// Append the new user as a member of every supplementary group
@@ -383,6 +403,25 @@ func mergeUsers(passwd, shadow, group accountFile, users []UserEntry) (
 func validateAccountField(kind, v string) error {
 	if strings.ContainsAny(v, ":\n\r\x00") {
 		return fmt.Errorf("%s %q contains an invalid character (':' '\\n' '\\r' or NUL)", kind, v)
+	}
+	return nil
+}
+
+// validateHomePath enforces the same shape that toTarPath requires of a
+// destination: an absolute POSIX path that resolves inside the rootfs.
+// A relative or '..'-laden home is meaningless to login(1) and would,
+// when NoCreateHome is false, also be rejected by tar emission; checking
+// up front gives a clearer error and covers the NoCreateHome case where
+// the path only lands in /etc/passwd.
+func validateHomePath(h string) error {
+	d := filepath.ToSlash(h)
+	if !strings.HasPrefix(d, "/") {
+		return fmt.Errorf("home %q must be an absolute POSIX path (start with '/')", h)
+	}
+	cleaned := path.Clean(d)
+	trimmed := strings.TrimPrefix(cleaned, "/")
+	if trimmed == "" || trimmed == "." || trimmed == ".." || strings.HasPrefix(trimmed, "../") {
+		return fmt.Errorf("home %q resolves outside the rootfs", h)
 	}
 	return nil
 }
