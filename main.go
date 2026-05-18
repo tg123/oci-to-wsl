@@ -222,7 +222,7 @@ func loadProfile(profile *config.Profile, saveTar string) error {
 	skipTarMods := isTarModsDisabled()
 	if skipTarMods && (len(profile.Deletes) > 0 || len(profile.Copies) > 0) {
 		// Print directly to stderr so this notice is not suppressed
-		// by --loglevel error / off; it reflects a user-requested
+		// by --loglevel error; it reflects a user-requested
 		// behavioural change that should always be visible.
 		fmt.Fprintf(os.Stderr, "OCI_TO_WSL_NO_TAR_MODS is set; skipping profile 'deletes' (%d) and 'copies' (%d) tar modifications\n",
 			len(profile.Deletes), len(profile.Copies))
