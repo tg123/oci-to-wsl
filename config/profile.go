@@ -45,6 +45,11 @@ type FileEntry struct {
 	// zero-byte file.
 	ContentBase64 *string `yaml:"content_base64,omitempty"`
 
+	// decodedBase64 caches the decoded bytes of ContentBase64 the first
+	// time Validate() succeeds, so the happy path does not decode the
+	// payload again at injection time.
+	decodedBase64 []byte `yaml:"-"`
+
 	// Dst is the destination POSIX path inside the WSL distribution and
 	// must be absolute (start with "/"). For a directory source, the
 	// directory itself is created at Dst and its contents are placed
@@ -84,9 +89,9 @@ func (e FileEntry) ReplaceEnabled() bool {
 // Validate checks that this FileEntry is well-formed: Dst must be set, and
 // exactly one source of file data (Src, Content, or ContentBase64) must be
 // provided. When ContentBase64 is set, it must also decode as standard
-// base64. Returns a descriptive error referencing the offending Dst when
-// possible.
-func (e FileEntry) Validate() error {
+// base64; the decoded bytes are cached on the entry so DecodedContent()
+// does not have to decode again on the happy path.
+func (e *FileEntry) Validate() error {
 	if e.Dst == "" {
 		return fmt.Errorf("'dst' is required")
 	}
@@ -107,11 +112,20 @@ func (e FileEntry) Validate() error {
 		return fmt.Errorf("%q: 'src', 'content', and 'content_base64' are mutually exclusive", e.Dst)
 	}
 	if e.ContentBase64 != nil {
-		if _, err := base64.StdEncoding.DecodeString(*e.ContentBase64); err != nil {
+		decoded, err := base64.StdEncoding.DecodeString(*e.ContentBase64)
+		if err != nil {
 			return fmt.Errorf("%q: decoding content_base64: %w", e.Dst, err)
 		}
+		e.decodedBase64 = decoded
 	}
 	return nil
+}
+
+// DecodedContentBase64 returns the bytes decoded from ContentBase64. It
+// must only be called after Validate() has succeeded on this entry; the
+// returned slice is the cached result of the validation-time decode.
+func (e FileEntry) DecodedContentBase64() []byte {
+	return e.decodedBase64
 }
 
 // Profile describes a WSL instance to create from an OCI image.
@@ -156,8 +170,8 @@ func (p *Profile) Validate() error {
 	if p.Image == "" {
 		return fmt.Errorf("'image' is required")
 	}
-	for i, f := range p.Files {
-		if err := f.Validate(); err != nil {
+	for i := range p.Files {
+		if err := p.Files[i].Validate(); err != nil {
 			return fmt.Errorf("files[%d]: %w", i, err)
 		}
 	}

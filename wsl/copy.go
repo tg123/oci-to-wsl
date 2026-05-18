@@ -169,13 +169,15 @@ func injectOne(tw *tar.Writer, e CopyEntry, addedDirs map[string]struct{}) error
 }
 
 // writeInlineFile writes a single regular-file entry at tarName whose body
-// is the supplied byte slice.
+// is the supplied byte slice. The tar header's ModTime is set to the Unix
+// epoch so that identical inline content produces an identical tar entry on
+// every run (inline data has no natural source timestamp).
 func writeInlineFile(tw *tar.Writer, tarName string, data []byte, mode int64) error {
 	hdr := &tar.Header{
 		Name:    tarName,
 		Mode:    mode,
 		Size:    int64(len(data)),
-		ModTime: time.Now(),
+		ModTime: time.Unix(0, 0),
 		Format:  tar.FormatPAX,
 	}
 	if err := tw.WriteHeader(hdr); err != nil {

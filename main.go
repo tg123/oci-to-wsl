@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"encoding/base64"
 	"fmt"
 	"io"
 	"log/slog"
@@ -302,8 +301,8 @@ func loadProfile(profile *config.Profile, saveTar string) error {
 // fileEntryToCopy translates a profile FileEntry into the wsl.CopyEntry
 // form consumed by InjectCopies. The caller is expected to have run
 // Profile.Validate() (or FileEntry.Validate()) first, so well-formedness
-// is assumed; the only error this can return is a base64 decoding failure
-// on ContentBase64.
+// is assumed and any base64 payload has already been decoded and cached
+// on the entry.
 func fileEntryToCopy(f config.FileEntry) (wsl.CopyEntry, error) {
 	switch {
 	case f.Src != "":
@@ -311,11 +310,7 @@ func fileEntryToCopy(f config.FileEntry) (wsl.CopyEntry, error) {
 	case f.Content != nil:
 		return wsl.CopyEntry{Data: []byte(*f.Content), Dst: f.Dst, Mode: f.Mode}, nil
 	case f.ContentBase64 != nil:
-		data, err := base64.StdEncoding.DecodeString(*f.ContentBase64)
-		if err != nil {
-			return wsl.CopyEntry{}, fmt.Errorf("profile files: %q: decoding content_base64: %w", f.Dst, err)
-		}
-		return wsl.CopyEntry{Data: data, Dst: f.Dst, Mode: f.Mode}, nil
+		return wsl.CopyEntry{Data: f.DecodedContentBase64(), Dst: f.Dst, Mode: f.Mode}, nil
 	default:
 		return wsl.CopyEntry{}, fmt.Errorf("profile files: %q: no source set (call Profile.Validate first)", f.Dst)
 	}
