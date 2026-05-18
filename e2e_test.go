@@ -171,7 +171,7 @@ init_cmds:
       - name: host_user
         value: $OCI_TO_WSL_E2E_HOST_USER
       - name: literal
-        value: 'with spaces and a $dollar'
+        value: 'with spaces and a $$dollar'
   - adduser -D e2euser
   - cmd: id -un > /tmp/whoami-marker
     run_as: e2euser

@@ -142,6 +142,9 @@ func (c *InitCmd) UnmarshalYAML(node *yaml.Node) error {
 		if err := node.Decode(&r); err != nil {
 			return fmt.Errorf("init_cmds: decoding mapping entry: %w", err)
 		}
+		if strings.TrimSpace(r.Cmd) == "" {
+			return fmt.Errorf("init_cmds: mapping entry at line %d is missing required 'cmd' field", node.Line)
+		}
 		c.Cmd = r.Cmd
 		c.RunAs = r.RunAs
 		c.Env = r.Env
@@ -374,6 +377,7 @@ func ExpandHostPath(p string) string {
 // any path-specific processing. It supports:
 //   - Windows %NAME% references (e.g. %USERPROFILE%, %APPDATA%)
 //   - POSIX $NAME / ${NAME} references
+//   - `$$` as an escape that yields a literal `$` (POSIX shell convention)
 //
 // Unknown variables are left as-is (Windows tokens stay %FOO%; POSIX tokens
 // are rewritten to ${FOO}) so a missing variable surfaces as an obvious
@@ -393,8 +397,13 @@ func ExpandEnvVars(s string) string {
 	})
 
 	// Expand $NAME / ${NAME} (POSIX). os.Expand returns "" for missing vars;
-	// preserve the original token instead.
+	// preserve the original token instead. `$$` is treated as a literal `$`
+	// (matching POSIX shell convention) so callers can forward a literal
+	// dollar sign through this expander.
 	s = os.Expand(s, func(name string) string {
+		if name == "$" {
+			return "$"
+		}
 		if v, ok := os.LookupEnv(name); ok {
 			return v
 		}

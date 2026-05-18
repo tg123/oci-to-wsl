@@ -12,12 +12,21 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/schollz/progressbar/v3"
 	gowsl "github.com/ubuntu/gowsl"
 )
+
+// envVarNameRE matches a valid POSIX-style environment variable name
+// (`[A-Za-z_][A-Za-z0-9_]*`). Names are written directly into the
+// generated shell script as `export <NAME>=...`, so anything outside
+// this character set (spaces, `;`, `$()`, `=`, etc.) could break the
+// shell parse or inject extra statements; RunCommand rejects such
+// names before constructing the command.
+var envVarNameRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // ImportOptions controls how a WSL distribution is created.
 type ImportOptions struct {
@@ -128,6 +137,9 @@ func RunCommand(distro, command string, opts RunOptions) error {
 			if e.Name == "" {
 				continue
 			}
+			if !envVarNameRE.MatchString(e.Name) {
+				return fmt.Errorf("invalid env var name %q: must match [A-Za-z_][A-Za-z0-9_]*", e.Name)
+			}
 			b.WriteString("export ")
 			b.WriteString(e.Name)
 			b.WriteString("=")
@@ -162,7 +174,8 @@ func RunCommand(distro, command string, opts RunOptions) error {
 }
 
 // shellSingleQuote wraps s in POSIX single quotes, escaping any embedded
-// single quotes as the conventional `'\”` sequence. The result is safe
+// single quotes as the conventional `'\”` sequence (close-quote,
+// backslash-escaped literal quote, re-open quote). The result is safe
 // to use as a single shell word in any POSIX-compatible shell.
 func shellSingleQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"

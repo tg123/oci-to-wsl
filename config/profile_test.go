@@ -273,6 +273,33 @@ func TestLoadProfile_InitCmds_InvalidEntry(t *testing.T) {
 	}
 }
 
+func TestLoadProfile_InitCmds_MappingMissingCmd(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "profile.yaml")
+	yaml := "name: x\nimage: alpine\ninit_cmds:\n  - env:\n      - name: FOO\n        value: bar\n"
+	if err := os.WriteFile(path, []byte(yaml), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := config.LoadProfile(path)
+	if err == nil {
+		t.Fatal("expected error for mapping init_cmds entry missing 'cmd', got nil")
+	}
+	if !strings.Contains(err.Error(), "cmd") {
+		t.Fatalf("error = %v, want message mentioning 'cmd'", err)
+	}
+}
+
+func TestExpandEnvVars_DollarEscape(t *testing.T) {
+	if got := config.ExpandEnvVars("a$$b"); got != "a$b" {
+		t.Errorf(`ExpandEnvVars("a$$b") = %q, want "a$b"`, got)
+	}
+	if got := config.ExpandEnvVars("$$"); got != "$" {
+		t.Errorf(`ExpandEnvVars("$$") = %q, want "$"`, got)
+	}
+	if got := config.ExpandEnvVars("with spaces and a $$dollar"); got != "with spaces and a $dollar" {
+		t.Errorf("ExpandEnvVars literal-dollar: got %q", got)
+	}
+}
+
 func TestLoadProfile_WslConfExpandsEnvVars(t *testing.T) {
 	t.Setenv("OCI_TO_WSL_TEST_USER", "alice")
 	yaml := "name: n\nimage: i\nwsl_conf:\n  mode: replace\n  content: |\n    [user]\n    default=$OCI_TO_WSL_TEST_USER\n    home=%OCI_TO_WSL_TEST_USER%\n"

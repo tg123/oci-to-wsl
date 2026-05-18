@@ -128,8 +128,10 @@ init_cmds:                       # optional – run inside the new distro after 
       echo "imported by $host_user" > /etc/oci-to-wsl.info
     env:
       - name: host_user          # value is expanded against the *Windows* env
-        value: $USER             # at profile-load time (%NAME% also works);
-                                 # unknown vars are preserved verbatim.
+        value: $USER             # at profile-load time (%NAME% / ${NAME} also
+                                 # work). Unknown variables are preserved
+                                 # verbatim ($FOO stays as ${FOO}); write `$$`
+                                 # to forward a literal `$`.
   - cmd: id > /home/alice/whoami.txt
     run_as: alice                # optional – run this command as in-distro user `alice`
 ```
