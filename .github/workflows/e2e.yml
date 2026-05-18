@@ -225,7 +225,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { Write-Host "unregister failed (non-fatal)" }
 
   e2e-wsl-copy-replace:
-    name: Profile files[].replace semantics
+    name: Profile files[].replace semantics (go test)
     runs-on: windows-latest
     env:
       WSL_UTF8: "1"
@@ -250,113 +250,9 @@ jobs:
           wsl.exe --status
           wsl.exe --version
 
-      - name: Prepare replacement directory + both profiles
+      - name: Run replace e2e tests
         shell: pwsh
-        run: |
-          $work = Join-Path $PWD 'e2e-replace'
-          New-Item -ItemType Directory -Force -Path $work | Out-Null
-          New-Item -ItemType Directory -Force -Path (Join-Path $work 'apk-replacement') | Out-Null
-
-          # The replacement tree we will stage at /etc/apk in both runs.
-          # Crucially it does NOT contain a file called 'repositories', which
-          # the upstream alpine image ships at /etc/apk/repositories: that
-          # asymmetry is what lets us tell "replaced the whole subtree" from
-          # "overlayed onto the existing subtree".
-          Set-Content -NoNewline `
-            -Path (Join-Path $work 'apk-replacement/marker.txt') `
-            -Value 'replace-marker'
-
-          # Profile A: default replace (omitted) - expect upstream wiped.
-          $profileA = @'
-          name: e2e-replace-default
-          image: alpine:latest
-          files:
-            - src: ./apk-replacement
-              dst: /etc/apk
-          '@
-          Set-Content -Path (Join-Path $work 'profile-default.yaml') -Value $profileA
-
-          # Profile B: explicit replace: false - expect upstream preserved.
-          $profileB = @'
-          name: e2e-replace-false
-          image: alpine:latest
-          files:
-            - src: ./apk-replacement
-              dst: /etc/apk
-              replace: false
-          '@
-          Set-Content -Path (Join-Path $work 'profile-false.yaml') -Value $profileB
-
-          Get-ChildItem -Recurse $work | Format-Table -AutoSize
-
-      - name: Import with default replace (expect upstream /etc/apk wiped)
-        shell: pwsh
-        run: |
-          $work = Join-Path $PWD 'e2e-replace'
-          $installDir = Join-Path $PWD 'wsl-e2e-replace-default'
-          .\oci-to-wsl.exe --profile (Join-Path $work 'profile-default.yaml') --dir $installDir
-          if ($LASTEXITCODE -ne 0) { throw "oci-to-wsl (default) failed: exit=$LASTEXITCODE" }
-
-      - name: Verify default replace dropped the upstream subtree
-        shell: pwsh
-        run: |
-          # Our marker must be present.
-          $marker = wsl.exe -d e2e-replace-default --user root --exec /bin/cat /etc/apk/marker.txt
-          if ($LASTEXITCODE -ne 0) { throw "marker.txt missing under default replace" }
-          $markerStr = ($marker | Out-String)
-          if ($markerStr -notmatch 'replace-marker') { throw "unexpected marker content: $markerStr" }
-
-          # Upstream alpine ships /etc/apk/repositories. With replace=true
-          # (the default) the whole /etc/apk subtree from the image must be
-          # gone, so this file must NOT exist.
-          wsl.exe -d e2e-replace-default --user root -- sh -c "test ! -e /etc/apk/repositories"
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "--- ls -la /etc/apk (debug) ---"
-            wsl.exe -d e2e-replace-default --user root --exec /bin/ls -la /etc/apk 2>&1 | Out-Host
-            throw "upstream /etc/apk/repositories still present - default replace did not drop the subtree"
-          }
-
-      - name: Tear down default-replace distro
-        if: always()
-        shell: pwsh
-        run: |
-          wsl.exe --unregister e2e-replace-default
-          if ($LASTEXITCODE -ne 0) { Write-Host "unregister failed (non-fatal)" }
-
-      - name: Import with replace=false (expect upstream preserved)
-        shell: pwsh
-        run: |
-          $work = Join-Path $PWD 'e2e-replace'
-          $installDir = Join-Path $PWD 'wsl-e2e-replace-false'
-          .\oci-to-wsl.exe --profile (Join-Path $work 'profile-false.yaml') --dir $installDir
-          if ($LASTEXITCODE -ne 0) { throw "oci-to-wsl (replace=false) failed: exit=$LASTEXITCODE" }
-
-      - name: Verify replace=false preserved the upstream subtree
-        shell: pwsh
-        run: |
-          # Our marker must still be present.
-          $marker = wsl.exe -d e2e-replace-false --user root --exec /bin/cat /etc/apk/marker.txt
-          if ($LASTEXITCODE -ne 0) { throw "marker.txt missing under replace=false" }
-          $markerStr = ($marker | Out-String)
-          if ($markerStr -notmatch 'replace-marker') { throw "unexpected marker content: $markerStr" }
-
-          # With replace=false the upstream /etc/apk/repositories must remain.
-          $repos = wsl.exe -d e2e-replace-false --user root --exec /bin/cat /etc/apk/repositories
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "--- ls -la /etc/apk (debug) ---"
-            wsl.exe -d e2e-replace-false --user root --exec /bin/ls -la /etc/apk 2>&1 | Out-Host
-            throw "upstream /etc/apk/repositories missing - replace=false unexpectedly dropped the subtree"
-          }
-          $reposStr = ($repos | Out-String)
-          if ([string]::IsNullOrWhiteSpace($reposStr)) { throw "/etc/apk/repositories is empty" }
-          Write-Host "preserved /etc/apk/repositories: $reposStr"
-
-      - name: Tear down replace=false distro
-        if: always()
-        shell: pwsh
-        run: |
-          wsl.exe --unregister e2e-replace-false
-          if ($LASTEXITCODE -ne 0) { Write-Host "unregister failed (non-fatal)" }
+        run: go test -tags=e2e -v -timeout 20m ./e2e/...
 
   e2e-docker-daemon:
     name: Load alpine from local docker daemon
