@@ -37,7 +37,14 @@ func ApplyDeletes(tarPath string, paths []string) error {
 	if err != nil {
 		return fmt.Errorf("open rootfs tar %q: %w", tarPath, err)
 	}
-	defer func() { _ = in.Close() }()
+	// Close in via defer on any error path; on the success path we close it
+	// explicitly before os.Rename (needed on Windows) and set the local to
+	// nil so this defer becomes a no-op rather than a double Close.
+	defer func() {
+		if in != nil {
+			_ = in.Close()
+		}
+	}()
 
 	outPath := tarPath + ".filtered"
 	out, err := os.OpenFile(outPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600) //nolint:gosec
@@ -100,6 +107,7 @@ func ApplyDeletes(tarPath string, paths []string) error {
 		cleanup()
 		return fmt.Errorf("closing source tar: %w", err)
 	}
+	in = nil
 	if err := os.Rename(outPath, tarPath); err != nil {
 		cleanup()
 		return fmt.Errorf("replacing rootfs tar: %w", err)
