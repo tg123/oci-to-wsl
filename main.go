@@ -221,8 +221,11 @@ func loadProfile(profile *config.Profile, saveTar string) error {
 	// --save-tar when you want an unmodified artifact).
 	skipTarMods := isTarModsDisabled()
 	if skipTarMods && (len(profile.Deletes) > 0 || len(profile.Copies) > 0) {
-		slog.Warn("OCI_TO_WSL_NO_TAR_MODS is set; skipping profile 'deletes' and 'copies' tar modifications",
-			"deletes", len(profile.Deletes), "copies", len(profile.Copies))
+		// Print directly to stderr so this notice is not suppressed
+		// by --loglevel error / off; it reflects a user-requested
+		// behavioural change that should always be visible.
+		fmt.Fprintf(os.Stderr, "OCI_TO_WSL_NO_TAR_MODS is set; skipping profile 'deletes' (%d) and 'copies' (%d) tar modifications\n",
+			len(profile.Deletes), len(profile.Copies))
 	}
 	if !skipTarMods && len(profile.Deletes) > 0 {
 		slog.Debug("applying profile deletes", "count", len(profile.Deletes))
