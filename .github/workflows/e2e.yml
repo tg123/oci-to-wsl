@@ -8,6 +8,12 @@ on:
 permissions:
   contents: read
 
+# All scenario logic lives in the table-driven Go runners (TestE2E /
+# TestE2EDockerDaemon, both guarded by `//go:build e2e`). Each job below
+# is intentionally a baseline of "build the binary, point the runner at
+# it, run `go test -tags=e2e`" — adding or removing scenarios should not
+# require touching this file.
+
 jobs:
   e2e-windows:
     name: WSL end-to-end (Go test runner)
@@ -45,19 +51,10 @@ jobs:
           # itself.
           OCI_TO_WSL_BIN: ${{ github.workspace }}\oci-to-wsl.exe
         run: |
-          go test -tags=e2e -timeout 30m -v -run TestE2E .
+          go test -tags=e2e -timeout 30m -v .
 
-      - name: Tear down leftover test distributions
-        if: always()
-        shell: pwsh
-        run: |
-          foreach ($d in @('e2e-alpine','e2e-copy')) {
-            wsl.exe --unregister $d 2>$null
-          }
-          exit 0
-
-  e2e-docker-daemon:
-    name: Load alpine from local docker daemon
+  e2e-linux:
+    name: Linux end-to-end (Go test runner)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -74,49 +71,11 @@ jobs:
           CGO_ENABLED: 0
         run: go build -trimpath -o oci-to-wsl .
 
-      - name: Ensure docker is running and seed an image only present locally
-        run: |
-          docker version
-          # Build an image with a tag that does not exist in any registry so
-          # the test fails if oci-to-wsl falls back to a registry pull instead
-          # of using the local docker daemon as expected.
-          docker pull alpine:latest
-          docker tag alpine:latest oci-to-wsl-e2e/local-only:notpublished
-          docker image inspect oci-to-wsl-e2e/local-only:notpublished >/dev/null
+      - name: Show docker status
+        run: docker version
 
-      - name: Export rootfs tar from docker daemon (auto-detected)
-        run: |
-          ./oci-to-wsl --image oci-to-wsl-e2e/local-only:notpublished --save-tar alpine-docker.tar
-          ls -lh alpine-docker.tar
-
-      - name: Verify exported rootfs tar looks like an alpine rootfs
-        run: |
-          # The flattened rootfs tar should contain the usual top-level dirs
-          # and /etc/alpine-release. Use tar -tf to inspect without extracting.
-          tar -tf alpine-docker.tar | head -50
-          if ! tar -tf alpine-docker.tar | grep -qE '(^|/)etc/alpine-release$'; then
-            echo "etc/alpine-release missing from rootfs tar"
-            exit 1
-          fi
-          # Extract and read alpine-release to make sure the file is non-empty.
-          mkdir rootfs-docker
-          tar -xf alpine-docker.tar -C rootfs-docker ./etc/alpine-release 2>/dev/null || \
-            tar -xf alpine-docker.tar -C rootfs-docker etc/alpine-release
-          test -s rootfs-docker/etc/alpine-release
-          echo "alpine-release: $(cat rootfs-docker/etc/alpine-release)"
-
-      - name: Verify OCI_TO_WSL_NO_LOCAL bypasses the local daemon
+      - name: Run end-to-end test suite
         env:
-          OCI_TO_WSL_NO_LOCAL: "1"
+          OCI_TO_WSL_BIN: ${{ github.workspace }}/oci-to-wsl
         run: |
-          # With the local lookup disabled, the registry path is forced. The
-          # local-only image does not exist on any registry, so the command
-          # must fail.
-          if ./oci-to-wsl --image oci-to-wsl-e2e/local-only:notpublished --save-tar should-not-exist.tar; then
-            echo "expected failure when OCI_TO_WSL_NO_LOCAL=1 forces a registry pull of a local-only image"
-            exit 1
-          fi
-          # Sanity check: with the flag on, pulling a real registry image
-          # should still work.
-          ./oci-to-wsl --image alpine:latest --save-tar alpine-registry.tar
-          test -s alpine-registry.tar
+          go test -tags=e2e -timeout 30m -v .

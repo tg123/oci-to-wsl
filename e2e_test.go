@@ -96,6 +96,10 @@ func TestE2E(t *testing.T) {
 	bin := ociToWSLBinary(t)
 
 	cases := []e2eCase{
+		// NOTE: distro names below are also unregistered up-front (and on
+		// t.Cleanup per case) so a prior aborted run cannot cause
+		// `wsl --import` to fail with "distribution already registered".
+		// The CI workflow therefore does not need its own teardown step.
 		{
 			name:   "alpine_import",
 			distro: "e2e-alpine",
@@ -176,6 +180,9 @@ init_cmds:
 
 	for _, tc := range cases {
 		tc := tc
+		// Best-effort cleanup of leftovers from prior aborted runs before
+		// the test attempts to import the same distro name.
+		_, _ = runOutput("wsl.exe", "--unregister", tc.distro)
 		t.Run(tc.name, func(t *testing.T) {
 			workDir := t.TempDir()
 			// Always try to unregister at the end - the case may have
