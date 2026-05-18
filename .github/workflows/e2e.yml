@@ -18,10 +18,6 @@ jobs:
   e2e-windows:
     name: WSL end-to-end (Go test runner)
     runs-on: windows-latest
-    env:
-      # Force wsl.exe to emit UTF-8 instead of UTF-16 LE so output captured
-      # by the Go test runner is decodable as plain UTF-8.
-      WSL_UTF8: "1"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
