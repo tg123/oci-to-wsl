@@ -177,7 +177,6 @@ init_cmds:
 			},
 		},
 		{
-		{
 			name:   "profile_users",
 			distro: "e2e-users",
 			setup: func(t *testing.T, workDir string) []string {
@@ -212,6 +211,15 @@ users:
 				{name: "bob_passwd", script: "getent passwd bob", wantSub: "bob:x:"},
 				{name: "bob_home_owned", script: "stat -c '%U' /home/bob", want: "bob"},
 				{name: "alice_can_su", script: "su -s /bin/sh alice -c 'id -un'", want: "alice"},
+				// Ownership-end-to-end: the new user must actually be
+				// able to write to their own home directory on first
+				// boot. This catches regressions where the home dir
+				// header lands in the tar with wrong uid/gid (e.g.,
+				// when the upstream rootfs already ships an explicit
+				// /home/<name> entry owned by root and ApplyUsers
+				// skips emitting a corrective trailing header).
+				{name: "alice_can_write_home", script: "su -s /bin/sh alice -c 'touch /home/alice/.ownership-probe && stat -c %U /home/alice/.ownership-probe'", want: "alice"},
+				{name: "bob_can_write_home", script: "su -s /bin/sh bob -c 'touch /home/bob/.ownership-probe && stat -c %U /home/bob/.ownership-probe'", want: "bob"},
 			},
 		},
 		{

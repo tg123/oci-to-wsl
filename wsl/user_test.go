@@ -2,6 +2,7 @@ package wsl_test
 
 import (
 	"archive/tar"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -485,6 +486,127 @@ func TestApplyUsers_CreatesAccountFilesWhenMissing(t *testing.T) {
 		}
 	}
 }
+
+// TestApplyUsers_RewritesExistingHomeOwnership covers the case where the
+// source rootfs tar already ships an explicit directory entry for the
+// new user's home (e.g., upstream image baked in a default-user layer).
+// The pre-existing entry is typically owned by root:root with mode
+// 0755; without ApplyUsers rewriting it, the new user could not write
+// into their own home on first login. The fix is to rewrite the
+// existing dir header in-place during the first pass and suppress the
+// duplicate trailing header in the second pass.
+func TestApplyUsers_RewritesExistingHomeOwnership(t *testing.T) {
+	dir := t.TempDir()
+	tarPath := filepath.Join(dir, "rootfs.tar")
+	writeTar(t, tarPath, []tarEntry{
+		{hdr: tar.Header{Name: "etc/passwd", Mode: 0o644, Typeflag: tar.TypeReg},
+			body: []byte("root:x:0:0:root:/root:/bin/sh\n")},
+		{hdr: tar.Header{Name: "etc/shadow", Mode: 0o640, Typeflag: tar.TypeReg},
+			body: []byte("root:*:::::::\n")},
+		{hdr: tar.Header{Name: "etc/group", Mode: 0o644, Typeflag: tar.TypeReg},
+			body: []byte("root:x:0:\n")},
+		{hdr: tar.Header{Name: "home/", Mode: 0o755, Typeflag: tar.TypeDir}},
+		// Pre-existing home dir owned by root:root with default mode.
+		{hdr: tar.Header{Name: "home/alice/", Mode: 0o755, Uid: 0, Gid: 0, Typeflag: tar.TypeDir}},
+	})
+
+	if err := wsl.ApplyUsers(tarPath, []wsl.UserEntry{{Name: "alice", UID: 1500, GID: 1500}}); err != nil {
+		t.Fatalf("ApplyUsers: %v", err)
+	}
+	got := readTar(t, tarPath)
+	home, ok := got["home/alice/"]
+	if !ok {
+		t.Fatalf("home/alice/ entry missing; entries: %v", keys(got))
+	}
+	if home.hdr.Typeflag != tar.TypeDir {
+		t.Fatalf("home/alice/ is not a directory entry, got type %v", home.hdr.Typeflag)
+	}
+	if home.hdr.Uid != 1500 || home.hdr.Gid != 1500 {
+		t.Fatalf("home/alice/ ownership not rewritten: uid=%d gid=%d (want 1500:1500)", home.hdr.Uid, home.hdr.Gid)
+	}
+	if home.hdr.Mode != 0o700 {
+		t.Fatalf("home/alice/ mode not rewritten: %o (want 0700)", home.hdr.Mode)
+	}
+
+	// Count dir entries for home/alice/ in the stream — must be exactly
+	// one so tar consumers don't have to resolve last-write-wins.
+	count := 0
+	rd := readTarOrdered(t, tarPath)
+	for _, e := range rd {
+		if e.hdr.Name == "home/alice/" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly one home/alice/ tar entry, got %d", count)
+	}
+}
+
+// TestApplyUsers_RewritesImplicitHomeOwnership covers the case where the
+// source tar ships a *child* file under the new user's home (e.g., a
+// pre-seeded .bashrc) but no explicit directory entry for the home
+// itself. Without an authoritative trailing dir header, wsl.exe
+// --import would create the implicit parent with default 0755 root:root
+// ownership and the user could not write to their own home.
+func TestApplyUsers_RewritesImplicitHomeOwnership(t *testing.T) {
+	dir := t.TempDir()
+	tarPath := filepath.Join(dir, "rootfs.tar")
+	writeTar(t, tarPath, []tarEntry{
+		{hdr: tar.Header{Name: "etc/passwd", Mode: 0o644, Typeflag: tar.TypeReg},
+			body: []byte("root:x:0:0:root:/root:/bin/sh\n")},
+		{hdr: tar.Header{Name: "etc/shadow", Mode: 0o640, Typeflag: tar.TypeReg},
+			body: []byte("root:*:::::::\n")},
+		{hdr: tar.Header{Name: "etc/group", Mode: 0o644, Typeflag: tar.TypeReg},
+			body: []byte("root:x:0:\n")},
+		// Child file under the home with no explicit home dir entry.
+		{hdr: tar.Header{Name: "home/alice/.bashrc", Mode: 0o644, Uid: 0, Gid: 0, Typeflag: tar.TypeReg},
+			body: []byte("# seeded\n")},
+	})
+
+	if err := wsl.ApplyUsers(tarPath, []wsl.UserEntry{{Name: "alice", UID: 1500, GID: 1500}}); err != nil {
+		t.Fatalf("ApplyUsers: %v", err)
+	}
+	got := readTar(t, tarPath)
+	home, ok := got["home/alice/"]
+	if !ok {
+		t.Fatalf("home/alice/ entry missing (must be emitted even when only implied by child files); entries: %v", keys(got))
+	}
+	if home.hdr.Typeflag != tar.TypeDir {
+		t.Fatalf("home/alice/ is not a directory entry, got type %v", home.hdr.Typeflag)
+	}
+	if home.hdr.Uid != 1500 || home.hdr.Gid != 1500 {
+		t.Fatalf("home/alice/ ownership: uid=%d gid=%d (want 1500:1500)", home.hdr.Uid, home.hdr.Gid)
+	}
+	if home.hdr.Mode != 0o700 {
+		t.Fatalf("home/alice/ mode: %o (want 0700)", home.hdr.Mode)
+	}
+	// The seeded child must survive untouched.
+	if _, ok := got["home/alice/.bashrc"]; !ok {
+		t.Fatalf("home/alice/.bashrc child missing; entries: %v", keys(got))
+	}
+}
+
+// readTarOrdered returns the entries in the order they appear so a test
+// can assert there's exactly one header per path.
+func readTarOrdered(t *testing.T, path string) []tarEntry {
+	t.Helper()
+	f, err := os.Open(path) //nolint:gosec
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	tr := tar.NewReader(f)
+	var out []tarEntry
+	for {
+		hdr, err := tr.Next()
+		if err != nil {
+			break
+		}
+		out = append(out, tarEntry{hdr: *hdr})
+	}
+	return out
+}
+
 
 func TestApplyUsers_PreservesOriginalHeaderMode(t *testing.T) {
 	// The substituted /etc/passwd should keep its original mode, not be

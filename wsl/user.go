@@ -586,6 +586,45 @@ func rewriteTarWithAccounts(
 		}
 	}
 
+	// plannedHomes maps the tar-relative path of each new user's home
+	// directory to that user's resolved uid/gid, so the first pass can
+	// rewrite ownership/mode of any pre-existing dir entry that lives at
+	// the same path. Without this, an upstream image that ships an
+	// (empty) /home/<name> directory would keep its original (typically
+	// root:root) ownership, leaving the new user unable to write to
+	// their own home on first login.
+	plannedHomes := map[string]resolvedUser{}
+	for _, ru := range resolved {
+		if ru.in.NoCreateHome {
+			continue
+		}
+		home := ru.in.Home
+		if home == "" {
+			home = "/home/" + ru.in.Name
+		}
+		tarName, terr := toTarPath(home)
+		if terr != nil {
+			return abort("user %q: invalid home %q: %w", ru.in.Name, home, terr)
+		}
+		// First user wins if two users somehow share a home path; that
+		// matches the second-pass dedup in addedHomes below.
+		if _, ok := plannedHomes[tarName]; !ok {
+			plannedHomes[tarName] = ru
+		}
+	}
+	// rewroteHomes tracks the planned home dirs whose pre-existing tar
+	// entry was rewritten in the first pass. The second-pass loop uses
+	// this (rather than addedDirs) to decide whether to emit a fresh
+	// home dir header, so that homes which are only *implicitly* present
+	// in the source tar (because a child file like
+	// home/<name>/.bashrc appears without an explicit dir entry) still
+	// get an authoritative trailing header with the correct ownership
+	// and mode. Without that, wsl.exe --import would extract the child
+	// files into a directory created with default permissions
+	// (typically 0755 root:root) and the new user could not write into
+	// their own home on first login.
+	rewroteHomes := map[string]struct{}{}
+
 	wrotePasswd, wroteShadow, wroteGroup := false, false, false
 	for {
 		hdr, rerr := tr.Next()
@@ -598,6 +637,22 @@ func rewriteTarWithAccounts(
 		name := normalizeTarName(hdr.Name)
 		if hdr.Typeflag == tar.TypeDir {
 			noteDir(name)
+			if ru, ok := plannedHomes[strings.TrimSuffix(name, "/")]; ok {
+				// Rewrite the existing home directory entry so it is
+				// owned by the new user with mode 0700, mirroring what
+				// the second pass would emit if the entry were absent.
+				h := *hdr
+				h.Uid = ru.uid
+				h.Gid = ru.gid
+				h.Uname = ""
+				h.Gname = ""
+				h.Mode = 0o700
+				if err := tw.WriteHeader(&h); err != nil {
+					return abort("writing tar header %q: %w", hdr.Name, err)
+				}
+				rewroteHomes[strings.TrimSuffix(name, "/")] = struct{}{}
+				continue
+			}
 		} else {
 			noteParents(name)
 		}
@@ -697,12 +752,12 @@ func rewriteTarWithAccounts(
 		if err := writeParentDirs(tw, tarName, addedDirs); err != nil {
 			return abort("writing parent dirs for home %q: %w", home, err)
 		}
-		if _, dup := addedDirs[tarName]; dup {
-			// A directory with this name was already emitted (e.g., the
-			// source tar contained it explicitly). Don't write a second
-			// header for the same path — tar consumers handle this
-			// inconsistently, and we'd otherwise produce a duplicate
-			// entry with different ownership.
+		if _, dup := rewroteHomes[tarName]; dup {
+			// The source tar contained an explicit dir entry for this
+			// home, and the first pass already rewrote it with the
+			// correct uid/gid/mode. Don't emit a second header for the
+			// same path — tar consumers handle duplicate dir entries
+			// inconsistently.
 			continue
 		}
 		hdr := &tar.Header{
