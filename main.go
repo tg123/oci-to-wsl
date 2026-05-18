@@ -293,10 +293,10 @@ func fileEntryToCopy(f config.FileEntry) (wsl.CopyEntry, error) {
 	if f.Src != "" {
 		sources++
 	}
-	if f.Content != "" {
+	if f.Content != nil {
 		sources++
 	}
-	if f.ContentBase64 != "" {
+	if f.ContentBase64 != nil {
 		sources++
 	}
 	if sources == 0 {
@@ -308,10 +308,10 @@ func fileEntryToCopy(f config.FileEntry) (wsl.CopyEntry, error) {
 	switch {
 	case f.Src != "":
 		return wsl.CopyEntry{Src: f.Src, Dst: f.Dst, Mode: f.Mode}, nil
-	case f.Content != "":
-		return wsl.CopyEntry{Data: []byte(f.Content), Dst: f.Dst, Mode: f.Mode}, nil
+	case f.Content != nil:
+		return wsl.CopyEntry{Data: []byte(*f.Content), Dst: f.Dst, Mode: f.Mode}, nil
 	default:
-		data, err := base64.StdEncoding.DecodeString(f.ContentBase64)
+		data, err := base64.StdEncoding.DecodeString(*f.ContentBase64)
 		if err != nil {
 			return wsl.CopyEntry{}, fmt.Errorf("profile files: %q: decoding content_base64: %w", f.Dst, err)
 		}

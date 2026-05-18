@@ -233,14 +233,14 @@ files:
 	if len(p.Files) != 2 {
 		t.Fatalf("Files length: got %d, want 2", len(p.Files))
 	}
-	if p.Files[0].Content != "hello-inline\n" {
-		t.Errorf("Files[0].Content: got %q", p.Files[0].Content)
+	if p.Files[0].Content == nil || *p.Files[0].Content != "hello-inline\n" {
+		t.Errorf("Files[0].Content: got %v", p.Files[0].Content)
 	}
 	if p.Files[0].Src != "" {
 		t.Errorf("Files[0].Src: expected empty, got %q", p.Files[0].Src)
 	}
-	if p.Files[1].ContentBase64 != "aGVsbG8K" {
-		t.Errorf("Files[1].ContentBase64: got %q", p.Files[1].ContentBase64)
+	if p.Files[1].ContentBase64 == nil || *p.Files[1].ContentBase64 != "aGVsbG8K" {
+		t.Errorf("Files[1].ContentBase64: got %v", p.Files[1].ContentBase64)
 	}
 	if p.Files[1].Mode != "0600" {
 		t.Errorf("Files[1].Mode: got %q", p.Files[1].Mode)

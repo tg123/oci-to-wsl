@@ -31,13 +31,18 @@ type FileEntry struct {
 
 	// Content is an inline UTF-8 file body. When set, no host file is
 	// read: the bytes are written verbatim to Dst as a single regular
-	// file. Mutually exclusive with Src and ContentBase64.
-	Content string `yaml:"content,omitempty"`
+	// file. Mutually exclusive with Src and ContentBase64. A pointer is
+	// used so an absent value is distinguishable from an explicit empty
+	// string, allowing `content: ""` to stage a zero-byte file.
+	Content *string `yaml:"content,omitempty"`
 
 	// ContentBase64 is an inline file body encoded with standard base64.
 	// Use this for binary or otherwise awkward content (it round-trips
-	// through YAML cleanly). Mutually exclusive with Src and Content.
-	ContentBase64 string `yaml:"content_base64,omitempty"`
+	// through YAML cleanly). Mutually exclusive with Src and Content. A
+	// pointer is used so an absent value is distinguishable from an
+	// explicit empty string, allowing `content_base64: ""` to stage a
+	// zero-byte file.
+	ContentBase64 *string `yaml:"content_base64,omitempty"`
 
 	// Dst is the destination POSIX path inside the WSL distribution and
 	// must be absolute (start with "/"). For a directory source, the

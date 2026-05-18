@@ -49,7 +49,10 @@ files:
     content: |
       Welcome to my-ubuntu
   - dst: /opt/secret.bin         # inline binary body (base64-encoded)
-    content_base64: aGVsbG8gd29ybGQK
+    # Decodes to the 8-byte PNG file signature (89 50 4E 47 0D 0A 1A 0A) —
+    # not valid UTF-8, which is exactly when `content_base64:` should be
+    # preferred over `content:`.
+    content_base64: iVBORw0KGgo=
     mode: "0600"
 
 # Optional: absolute POSIX paths to remove from the rootfs tar before
