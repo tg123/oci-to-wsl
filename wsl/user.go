@@ -79,16 +79,52 @@ func ApplyUsers(tarPath string, users []UserEntry) error {
 	if len(users) == 0 {
 		return nil
 	}
+	// Normalize once and validate. The normalized values flow into
+	// mergeUsers so what we dedup-check matches what we actually write.
 	seen := make(map[string]struct{}, len(users))
-	for i, u := range users {
+	for i := range users {
+		u := &users[i]
 		name := strings.TrimSpace(u.Name)
 		if name == "" {
 			return fmt.Errorf("user entry %d: 'name' is required", i)
+		}
+		if err := validateAccountField("name", name); err != nil {
+			return fmt.Errorf("user entry %d: %w", i, err)
 		}
 		if _, dup := seen[name]; dup {
 			return fmt.Errorf("user %q listed more than once", name)
 		}
 		seen[name] = struct{}{}
+		u.Name = name
+		if u.Home != "" {
+			if err := validateAccountField("home", u.Home); err != nil {
+				return fmt.Errorf("user %q: %w", name, err)
+			}
+		}
+		if u.Shell != "" {
+			if err := validateAccountField("shell", u.Shell); err != nil {
+				return fmt.Errorf("user %q: %w", name, err)
+			}
+		}
+		if u.Gecos != "" {
+			if err := validateAccountField("gecos", u.Gecos); err != nil {
+				return fmt.Errorf("user %q: %w", name, err)
+			}
+		}
+		for _, g := range u.Groups {
+			if err := validateAccountField("group", g); err != nil {
+				return fmt.Errorf("user %q: %w", name, err)
+			}
+		}
+		if u.PasswordHash != "" {
+			// The hash is written into /etc/shadow as-is; newline/NUL
+			// would terminate the record early and let arbitrary lines
+			// follow. ':' is allowed only via aging-fields suffixes, so
+			// reject any ':' too — supply a bare crypt hash.
+			if err := validateAccountField("password_hash", u.PasswordHash); err != nil {
+				return fmt.Errorf("user %q: %w", name, err)
+			}
+		}
 	}
 
 	passwd, shadow, group, err := readAccountFiles(tarPath)
@@ -339,6 +375,18 @@ func mergeUsers(passwd, shadow, group accountFile, users []UserEntry) (
 	return
 }
 
+// validateAccountField rejects characters that would corrupt the
+// colon-delimited account files. A literal ':' or '\n' would split a
+// record and could be used to inject extra entries; '\r' likewise breaks
+// parsers that treat it as a line terminator. Null bytes are never
+// valid in these files.
+func validateAccountField(kind, v string) error {
+	if strings.ContainsAny(v, ":\n\r\x00") {
+		return fmt.Errorf("%s %q contains an invalid character (':' '\\n' '\\r' or NUL)", kind, v)
+	}
+	return nil
+}
+
 func splitLines(b []byte) []string {
 	if len(b) == 0 {
 		return nil
@@ -416,6 +464,32 @@ func rewriteTarWithAccounts(
 		return fmt.Errorf(format, args...)
 	}
 
+	// addedDirs tracks every directory that already exists in (or has
+	// been written to) the output tar, so writeParentDirs can skip them
+	// when emitting synthesized account files or home directory entries.
+	// We also seed it from the parent path of every regular file we see,
+	// which mirrors the implicit directory tree contained in the source
+	// tar even when the upstream image omits explicit dir entries.
+	addedDirs := map[string]struct{}{}
+	noteDir := func(p string) {
+		p = strings.TrimSuffix(p, "/")
+		if p == "" || p == "." {
+			return
+		}
+		addedDirs[p] = struct{}{}
+	}
+	noteParents := func(p string) {
+		p = strings.TrimSuffix(p, "/")
+		for {
+			i := strings.LastIndex(p, "/")
+			if i <= 0 {
+				return
+			}
+			p = p[:i]
+			noteDir(p)
+		}
+	}
+
 	wrotePasswd, wroteShadow, wroteGroup := false, false, false
 	for {
 		hdr, rerr := tr.Next()
@@ -425,9 +499,15 @@ func rewriteTarWithAccounts(
 		if rerr != nil {
 			return abort("reading tar entry: %w", rerr)
 		}
+		name := normalizeTarName(hdr.Name)
+		if hdr.Typeflag == tar.TypeDir {
+			noteDir(name)
+		} else {
+			noteParents(name)
+		}
 		var sub *accountFile
 		if hdr.Typeflag == tar.TypeReg {
-			switch normalizeTarName(hdr.Name) {
+			switch name {
 			case tarEtcPasswd:
 				sub = &newPasswd
 				wrotePasswd = true
@@ -483,6 +563,9 @@ func rewriteTarWithAccounts(
 		if af.wrote || !af.file.present {
 			continue
 		}
+		if err := writeParentDirs(tw, af.file.header.Name, addedDirs); err != nil {
+			return abort("writing parent dirs for %q: %w", af.file.header.Name, err)
+		}
 		h := af.file.header
 		h.Size = int64(len(af.file.body))
 		if err := tw.WriteHeader(&h); err != nil {
@@ -515,6 +598,17 @@ func rewriteTarWithAccounts(
 			continue
 		}
 		addedHomes[tarName] = struct{}{}
+		if err := writeParentDirs(tw, tarName, addedDirs); err != nil {
+			return abort("writing parent dirs for home %q: %w", home, err)
+		}
+		if _, dup := addedDirs[tarName]; dup {
+			// A directory with this name was already emitted (e.g., the
+			// source tar contained it explicitly). Don't write a second
+			// header for the same path — tar consumers handle this
+			// inconsistently, and we'd otherwise produce a duplicate
+			// entry with different ownership.
+			continue
+		}
 		hdr := &tar.Header{
 			Name:     tarName + "/",
 			Mode:     0o700,
@@ -526,6 +620,7 @@ func rewriteTarWithAccounts(
 		if err := tw.WriteHeader(hdr); err != nil {
 			return abort("writing home dir %q: %w", home, err)
 		}
+		noteDir(tarName)
 	}
 
 	if err := tw.Close(); err != nil {

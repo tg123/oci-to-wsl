@@ -203,7 +203,7 @@ users:
 				{name: "alice_home_exists", script: "test -d /home/alice && stat -c '%u:%g:%a' /home/alice", want: "1500:1500:700"},
 				{name: "alice_shadow", script: "grep '^alice:' /etc/shadow", wantSub: "alice:!:"},
 				{name: "alice_in_wheel", script: "getent group wheel", wantSub: "alice"},
-				{name: "doesnotexist_not_created", script: "getent group doesnotexist; true", want: ""},
+				{name: "doesnotexist_not_created", script: "if getent group doesnotexist >/dev/null 2>&1; then echo CREATED; else echo MISSING; fi", want: "MISSING"},
 				{name: "bob_passwd", script: "getent passwd bob", wantSub: "bob:x:"},
 				{name: "bob_home_owned", script: "stat -c '%U' /home/bob", want: "bob"},
 				{name: "alice_can_su", script: "su -s /bin/sh alice -c 'id -un'", want: "alice"},

@@ -211,6 +211,32 @@ func TestApplyUsers_EmptyNameRejected(t *testing.T) {
 	}
 }
 
+func TestApplyUsers_InjectionCharsRejected(t *testing.T) {
+	// User-controlled fields are written verbatim into colon-delimited
+	// files; ':' or '\n' in any of them would let a profile inject
+	// extra /etc/passwd entries. Make sure each is rejected.
+	cases := []struct {
+		name string
+		u    wsl.UserEntry
+	}{
+		{"colon_in_name", wsl.UserEntry{Name: "ev:il"}},
+		{"newline_in_name", wsl.UserEntry{Name: "ev\nil"}},
+		{"colon_in_home", wsl.UserEntry{Name: "ok", Home: "/home/x:y"}},
+		{"newline_in_shell", wsl.UserEntry{Name: "ok", Shell: "/bin/sh\nroot::0:0::/:/bin/sh"}},
+		{"colon_in_gecos", wsl.UserEntry{Name: "ok", Gecos: "a:b"}},
+		{"colon_in_group", wsl.UserEntry{Name: "ok", Groups: []string{"sudo:foo"}}},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			tarPath := baseAccountTar(t)
+			if err := wsl.ApplyUsers(tarPath, []wsl.UserEntry{tc.u}); err == nil {
+				t.Fatalf("expected ApplyUsers to reject %+v", tc.u)
+			}
+		})
+	}
+}
+
 func TestApplyUsers_EmptyIsNoop(t *testing.T) {
 	tarPath := baseAccountTar(t)
 	before := readTar(t, tarPath)
@@ -273,6 +299,14 @@ func TestApplyUsers_CreatesAccountFilesWhenMissing(t *testing.T) {
 	}
 	if findGroupLine(got["etc/group"].body, "solo") == nil {
 		t.Fatalf("solo primary group missing: %q", got["etc/group"].body)
+	}
+	// Parent directory entries for the synthesized account files and the
+	// home directory must also be present — wsl.exe --import requires
+	// the parent dirs to exist before any child entry (see InjectCopies).
+	for _, dir := range []string{"etc/", "home/"} {
+		if _, ok := got[dir]; !ok {
+			t.Fatalf("expected parent directory %q to be synthesized; entries: %v", dir, keys(got))
+		}
 	}
 }
 
