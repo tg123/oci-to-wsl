@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -80,6 +81,39 @@ func (e FileEntry) ReplaceEnabled() bool {
 	return *e.Replace
 }
 
+// Validate checks that this FileEntry is well-formed: Dst must be set, and
+// exactly one source of file data (Src, Content, or ContentBase64) must be
+// provided. When ContentBase64 is set, it must also decode as standard
+// base64. Returns a descriptive error referencing the offending Dst when
+// possible.
+func (e FileEntry) Validate() error {
+	if e.Dst == "" {
+		return fmt.Errorf("'dst' is required")
+	}
+	sources := 0
+	if e.Src != "" {
+		sources++
+	}
+	if e.Content != nil {
+		sources++
+	}
+	if e.ContentBase64 != nil {
+		sources++
+	}
+	if sources == 0 {
+		return fmt.Errorf("%q: exactly one of 'src', 'content', or 'content_base64' is required", e.Dst)
+	}
+	if sources > 1 {
+		return fmt.Errorf("%q: 'src', 'content', and 'content_base64' are mutually exclusive", e.Dst)
+	}
+	if e.ContentBase64 != nil {
+		if _, err := base64.StdEncoding.DecodeString(*e.ContentBase64); err != nil {
+			return fmt.Errorf("%q: decoding content_base64: %w", e.Dst, err)
+		}
+	}
+	return nil
+}
+
 // Profile describes a WSL instance to create from an OCI image.
 type Profile struct {
 	// Name is the WSL distribution name.
@@ -109,6 +143,25 @@ type Profile struct {
 
 	// InitCmds is a list of shell commands to run inside the new WSL instance after it is created.
 	InitCmds []string `yaml:"init_cmds"`
+}
+
+// Validate checks the profile for internal consistency without performing
+// any I/O (it does not check for the existence of Src files or the
+// suitability of InstallDir). It is intended to be called before any
+// expensive work (e.g. pulling the image) so user-facing errors surface
+// fast. The Image field and each Files entry are validated; Name and
+// InstallDir are intentionally not checked here because their
+// requirements differ between WSL-import and --save-tar modes.
+func (p *Profile) Validate() error {
+	if p.Image == "" {
+		return fmt.Errorf("'image' is required")
+	}
+	for i, f := range p.Files {
+		if err := f.Validate(); err != nil {
+			return fmt.Errorf("files[%d]: %w", i, err)
+		}
+	}
+	return nil
 }
 
 // LoadProfile reads a YAML profile from the given file path.

@@ -3,6 +3,7 @@ package config_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tg123/oci-to-wsl/config"
@@ -244,6 +245,86 @@ files:
 	}
 	if p.Files[1].Mode != "0600" {
 		t.Errorf("Files[1].Mode: got %q", p.Files[1].Mode)
+	}
+}
+
+func TestProfile_Validate(t *testing.T) {
+	empty := ""
+	s := func(v string) *string { return &v }
+	cases := []struct {
+		name    string
+		profile config.Profile
+		wantErr string // substring; empty means expect nil
+	}{
+		{
+			name:    "missing image",
+			profile: config.Profile{Name: "n"},
+			wantErr: "'image' is required",
+		},
+		{
+			name: "src only ok",
+			profile: config.Profile{Image: "alpine", Files: []config.FileEntry{
+				{Src: "/host/x", Dst: "/x"},
+			}},
+		},
+		{
+			name: "content only ok (empty allowed)",
+			profile: config.Profile{Image: "alpine", Files: []config.FileEntry{
+				{Content: &empty, Dst: "/x"},
+			}},
+		},
+		{
+			name: "src and content both set",
+			profile: config.Profile{Image: "alpine", Files: []config.FileEntry{
+				{Src: "/host/x", Content: s("hi"), Dst: "/x"},
+			}},
+			wantErr: "mutually exclusive",
+		},
+		{
+			name: "src and content_base64 both set",
+			profile: config.Profile{Image: "alpine", Files: []config.FileEntry{
+				{Src: "/host/x", ContentBase64: s("aGk="), Dst: "/x"},
+			}},
+			wantErr: "mutually exclusive",
+		},
+		{
+			name: "no source",
+			profile: config.Profile{Image: "alpine", Files: []config.FileEntry{
+				{Dst: "/x"},
+			}},
+			wantErr: "exactly one of",
+		},
+		{
+			name: "missing dst",
+			profile: config.Profile{Image: "alpine", Files: []config.FileEntry{
+				{Src: "/host/x"},
+			}},
+			wantErr: "'dst' is required",
+		},
+		{
+			name: "invalid base64",
+			profile: config.Profile{Image: "alpine", Files: []config.FileEntry{
+				{ContentBase64: s("not!!base64"), Dst: "/x"},
+			}},
+			wantErr: "decoding content_base64",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.profile.Validate()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error %q does not contain %q", err.Error(), tc.wantErr)
+			}
+		})
 	}
 }
 

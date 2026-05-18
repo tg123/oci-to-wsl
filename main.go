@@ -148,8 +148,8 @@ func action(_ context.Context, cmd *cli.Command) error {
 }
 
 func loadProfile(profile *config.Profile, saveTar string) error {
-	if profile.Image == "" {
-		return fmt.Errorf("profile: 'image' is required")
+	if err := profile.Validate(); err != nil {
+		return fmt.Errorf("profile: %w", err)
 	}
 	if saveTar == "" && profile.Name == "" {
 		return fmt.Errorf("profile: 'name' is required")
@@ -282,40 +282,25 @@ func loadProfile(profile *config.Profile, saveTar string) error {
 	return nil
 }
 
-// fileEntryToCopy validates a profile FileEntry and translates it into the
-// wsl.CopyEntry form consumed by InjectCopies. Exactly one of `src`,
-// `content`, or `content_base64` must be set; `dst` is always required.
+// fileEntryToCopy translates a profile FileEntry into the wsl.CopyEntry
+// form consumed by InjectCopies. The caller is expected to have run
+// Profile.Validate() (or FileEntry.Validate()) first, so well-formedness
+// is assumed; the only error this can return is a base64 decoding failure
+// on ContentBase64.
 func fileEntryToCopy(f config.FileEntry) (wsl.CopyEntry, error) {
-	if f.Dst == "" {
-		return wsl.CopyEntry{}, fmt.Errorf("profile files: 'dst' is required")
-	}
-	sources := 0
-	if f.Src != "" {
-		sources++
-	}
-	if f.Content != nil {
-		sources++
-	}
-	if f.ContentBase64 != nil {
-		sources++
-	}
-	if sources == 0 {
-		return wsl.CopyEntry{}, fmt.Errorf("profile files: %q: exactly one of 'src', 'content', or 'content_base64' is required", f.Dst)
-	}
-	if sources > 1 {
-		return wsl.CopyEntry{}, fmt.Errorf("profile files: %q: 'src', 'content', and 'content_base64' are mutually exclusive", f.Dst)
-	}
 	switch {
 	case f.Src != "":
 		return wsl.CopyEntry{Src: f.Src, Dst: f.Dst, Mode: f.Mode}, nil
 	case f.Content != nil:
 		return wsl.CopyEntry{Data: []byte(*f.Content), Dst: f.Dst, Mode: f.Mode}, nil
-	default:
+	case f.ContentBase64 != nil:
 		data, err := base64.StdEncoding.DecodeString(*f.ContentBase64)
 		if err != nil {
 			return wsl.CopyEntry{}, fmt.Errorf("profile files: %q: decoding content_base64: %w", f.Dst, err)
 		}
 		return wsl.CopyEntry{Data: data, Dst: f.Dst, Mode: f.Mode}, nil
+	default:
+		return wsl.CopyEntry{}, fmt.Errorf("profile files: %q: no source set (call Profile.Validate first)", f.Dst)
 	}
 }
 
