@@ -142,7 +142,6 @@ func TestE2E(t *testing.T) {
 				profile := `name: e2e-copy
 image: alpine:latest
 files:
-copies:
   - src: ./scripts/bootstrap.sh
     dst: /usr/local/bin/bootstrap.sh
     mode: "0755"
