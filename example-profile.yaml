@@ -44,6 +44,23 @@ deletes:
   - /etc/motd
 
 # Optional: shell commands to run inside the new WSL instance after import.
+# Each entry may be either a plain string (the command line) or a mapping
+# with `cmd` and optional `env` keys. Values under `env` may reference
+# Windows-side environment variables using %NAME% or $NAME / ${NAME} — those
+# references are expanded at profile-load time against the oci-to-wsl
+# process's environment, so a profile can forward host-side values like
+# %USERNAME% or $USER into the new distribution. Unknown variables are
+# preserved verbatim. The `cmd` string itself is NOT expanded by oci-to-wsl;
+# it is forwarded as-is to the WSL shell, where normal shell substitution
+# applies (so `echo "$host_user"` in `cmd` reads the env entry of the same
+# name exported above).
 init_cmds:
   - apt-get update -y
   - apt-get install -y curl git vim
+  - cmd: |
+      echo "imported by $host_user on $(date)" > /etc/oci-to-wsl.info
+    env:
+      - name: host_user
+        value: $USER
+  - cmd: id > /home/alice/whoami.txt
+    run_as: alice                # run this command as the in-distro user `alice`

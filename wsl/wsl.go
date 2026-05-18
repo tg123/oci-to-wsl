@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/schollz/progressbar/v3"
@@ -76,20 +77,80 @@ func Import(opts ImportOptions) error {
 	return nil
 }
 
+// EnvVar is a single environment variable to export inside the WSL
+// distribution before running an init command. Value is used verbatim
+// (no host-side expansion happens here — callers should pre-expand any
+// host-side references they want to forward).
+type EnvVar struct {
+	Name  string
+	Value string
+}
+
+// RunOptions tunes how RunCommand executes a command inside a distro.
+type RunOptions struct {
+	// Env is exported in the in-distro shell before the command runs.
+	Env []EnvVar
+	// RunAs, when non-empty, runs the command as the named in-distro
+	// user via `su <user> -c <body>`. When empty the command runs as
+	// the distribution's default user (root for a freshly imported
+	// rootfs unless /etc/wsl.conf overrides it).
+	RunAs string
+}
+
 // RunCommand executes a shell command inside an existing WSL distribution.
 //
 // stdout/stderr of the in-distro process are streamed to the parent process's
 // stdout/stderr. Because gowsl uses WslLaunch under the hood, the output is
 // whatever bytes the Linux program writes (typically UTF-8) — there is no
 // UTF-16 transcoding step as there is with `wsl.exe` on its own.
-func RunCommand(distro, command string) error {
+//
+// If opts.Env is non-empty, each variable is exported in the in-distro
+// shell before command runs. If opts.RunAs is non-empty, the whole body
+// (exports + command) is executed via `su <user> -c <body>` so it runs
+// as that user. Values are single-quote shell-escaped so arbitrary
+// content (including quotes and `$`) is forwarded literally.
+func RunCommand(distro, command string, opts RunOptions) error {
 	ctx := context.Background()
 
-	slog.Info("running command in WSL distribution", "distro", distro, "command", command)
+	slog.Info("running command in WSL distribution",
+		"distro", distro,
+		"command", command,
+		"env_count", len(opts.Env),
+		"run_as", opts.RunAs,
+	)
 	start := time.Now()
 
+	// Build the in-shell body: exports first, then the user's command.
+	body := command
+	if len(opts.Env) > 0 {
+		var b strings.Builder
+		for _, e := range opts.Env {
+			if e.Name == "" {
+				continue
+			}
+			b.WriteString("export ")
+			b.WriteString(e.Name)
+			b.WriteString("=")
+			b.WriteString(shellSingleQuote(e.Value))
+			b.WriteString("; ")
+		}
+		b.WriteString(command)
+		body = b.String()
+	}
+
+	// If a target user was requested, wrap with `su` so the command
+	// (including the exports above) runs in that user's shell. `su`
+	// is universally available (util-linux on glibc distros, busybox
+	// applet on alpine) and does not prompt for a password when the
+	// caller is already root, which is the case for a freshly
+	// imported OCI rootfs.
+	full := body
+	if opts.RunAs != "" {
+		full = "su " + opts.RunAs + " -c " + shellSingleQuote(body)
+	}
+
 	d := gowsl.NewDistro(ctx, distro)
-	cmd := d.Command(ctx, command)
+	cmd := d.Command(ctx, full)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	err := cmd.Run()
@@ -98,4 +159,11 @@ func RunCommand(distro, command string) error {
 		return fmt.Errorf("command %q failed in %q: %w", command, distro, err)
 	}
 	return nil
+}
+
+// shellSingleQuote wraps s in POSIX single quotes, escaping any embedded
+// single quotes as the conventional `'\''` sequence. The result is safe
+// to use as a single shell word in any POSIX-compatible shell.
+func shellSingleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

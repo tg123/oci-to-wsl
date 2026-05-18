@@ -31,8 +31,11 @@ init_cmds:
 	if len(p.InitCmds) != 2 {
 		t.Fatalf("InitCmds length: got %d, want 2", len(p.InitCmds))
 	}
-	if p.InitCmds[0] != "apt-get update -y" {
-		t.Errorf("InitCmds[0]: got %q, want %q", p.InitCmds[0], "apt-get update -y")
+	if p.InitCmds[0].Cmd != "apt-get update -y" {
+		t.Errorf("InitCmds[0].Cmd: got %q, want %q", p.InitCmds[0].Cmd, "apt-get update -y")
+	}
+	if len(p.InitCmds[0].Env) != 0 {
+		t.Errorf("InitCmds[0].Env: expected empty, got %v", p.InitCmds[0].Env)
 	}
 }
 
@@ -199,4 +202,72 @@ func writeAndLoad(t *testing.T, yamlContent string) *config.Profile {
 		t.Fatalf("LoadProfile: unexpected error: %v", err)
 	}
 	return p
+}
+
+func TestLoadProfile_InitCmds_StringAndObjectForms(t *testing.T) {
+	t.Setenv("OCI_TO_WSL_TEST_USER", "alice")
+
+	yaml := `
+name: init-distro
+image: alpine:latest
+init_cmds:
+  - echo 1
+  - cmd: |
+      echo "hi $user"
+    run_as: alice
+    env:
+      - name: user
+        value: $OCI_TO_WSL_TEST_USER
+      - name: HOME_OVERRIDE
+        value: '%OCI_TO_WSL_TEST_USER%-home'
+      - name: KEEP_LITERAL
+        value: $OCI_TO_WSL_DEFINITELY_UNSET
+`
+	p := writeAndLoad(t, yaml)
+
+	if len(p.InitCmds) != 2 {
+		t.Fatalf("InitCmds: got %d, want 2", len(p.InitCmds))
+	}
+
+	if p.InitCmds[0].Cmd != "echo 1" {
+		t.Errorf("InitCmds[0].Cmd: got %q, want %q", p.InitCmds[0].Cmd, "echo 1")
+	}
+	if p.InitCmds[0].RunAs != "" {
+		t.Errorf("InitCmds[0].RunAs: got %q, want empty", p.InitCmds[0].RunAs)
+	}
+	if len(p.InitCmds[0].Env) != 0 {
+		t.Errorf("InitCmds[0].Env: expected empty, got %v", p.InitCmds[0].Env)
+	}
+
+	wantCmd := "echo \"hi $user\"\n"
+	if p.InitCmds[1].Cmd != wantCmd {
+		t.Errorf("InitCmds[1].Cmd: got %q, want %q", p.InitCmds[1].Cmd, wantCmd)
+	}
+	if p.InitCmds[1].RunAs != "alice" {
+		t.Errorf("InitCmds[1].RunAs: got %q, want %q", p.InitCmds[1].RunAs, "alice")
+	}
+	if len(p.InitCmds[1].Env) != 3 {
+		t.Fatalf("InitCmds[1].Env: got %d entries, want 3", len(p.InitCmds[1].Env))
+	}
+	if got := p.InitCmds[1].Env[0]; got.Name != "user" || got.Value != "alice" {
+		t.Errorf("InitCmds[1].Env[0]: got %+v, want {user alice}", got)
+	}
+	if got := p.InitCmds[1].Env[1]; got.Name != "HOME_OVERRIDE" || got.Value != "alice-home" {
+		t.Errorf("InitCmds[1].Env[1]: got %+v, want {HOME_OVERRIDE alice-home}", got)
+	}
+	// Unknown $VAR is preserved verbatim as ${NAME}.
+	if got := p.InitCmds[1].Env[2]; got.Name != "KEEP_LITERAL" || got.Value != "${OCI_TO_WSL_DEFINITELY_UNSET}" {
+		t.Errorf("InitCmds[1].Env[2]: got %+v, want unknown preserved", got)
+	}
+}
+
+func TestLoadProfile_InitCmds_InvalidEntry(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "profile.yaml")
+	if err := os.WriteFile(path, []byte("name: x\nimage: alpine\ninit_cmds:\n  - [not, a, string]\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.LoadProfile(path); err == nil {
+		t.Fatal("expected error for non-string / non-mapping init_cmds entry, got nil")
+	}
 }

@@ -259,8 +259,15 @@ func loadProfile(profile *config.Profile, saveTar string) error {
 
 	// Run any post-creation initialisation commands.
 	for _, c := range profile.InitCmds {
-		if err := wsl.RunCommand(profile.Name, c); err != nil {
-			return fmt.Errorf("init command %q failed: %w", c, err)
+		env := make([]wsl.EnvVar, 0, len(c.Env))
+		for _, e := range c.Env {
+			env = append(env, wsl.EnvVar{Name: e.Name, Value: e.Value})
+		}
+		if err := wsl.RunCommand(profile.Name, c.Cmd, wsl.RunOptions{
+			Env:   env,
+			RunAs: c.RunAs,
+		}); err != nil {
+			return fmt.Errorf("init command %q failed: %w", c.Cmd, err)
 		}
 	}
 
