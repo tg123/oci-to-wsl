@@ -251,6 +251,7 @@ func TestApplyUsers_InvalidHomePathRejected(t *testing.T) {
 		{"relative_home", wsl.UserEntry{Name: "a", Home: "home/a"}},
 		{"dot_home", wsl.UserEntry{Name: "c", Home: "/./"}},
 		{"relative_home_no_create", wsl.UserEntry{Name: "d", Home: "tmp", NoCreateHome: true}},
+		{"dotdot_prefix_home", wsl.UserEntry{Name: "e", Home: "/..foo", NoCreateHome: true}},
 	}
 	for _, tc := range cases {
 		tc := tc
@@ -606,7 +607,6 @@ func readTarOrdered(t *testing.T, path string) []tarEntry {
 	}
 	return out
 }
-
 
 func TestApplyUsers_PreservesOriginalHeaderMode(t *testing.T) {
 	// The substituted /etc/passwd should keep its original mode, not be
