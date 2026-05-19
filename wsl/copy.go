@@ -345,22 +345,22 @@ func writeDirTree(tw *tar.Writer, src, dstBase string, hasMode bool, modeOverrid
 }
 
 // scanExistingDirs reads through a tar archive and returns the set of
-// directory entry names (normalised to the tar-relative, no-leading-slash,
-// no-trailing-slash form produced by toTarPath) that the archive already
-// contains. It is used by InjectCopies to suppress duplicate parent-dir
-// headers that would otherwise overwrite ownership/mode set by earlier
-// passes (notably ApplyUsers writing /home/<name> as <uid>:<gid> 0700).
+// directory entry names (normalised via normalizeTarName, matching the
+// form produced by toTarPath) that the archive already contains. It is
+// used by InjectCopies to suppress duplicate parent-dir headers that
+// would otherwise overwrite ownership/mode set by earlier passes
+// (notably ApplyUsers writing /home/<name> as <uid>:<gid> 0700).
 //
 // The function leaves the file offset at the start on return so the
-// caller can continue with truncateTarTrailer + append. Errors reading
-// individual entries are non-fatal: a malformed or partially-readable
-// trailer just means we fall back to the original behaviour (emitting
-// fresh dir headers).
+// caller can continue with truncateTarTrailer + append. If the tar is
+// malformed or only partially readable the caller is handed an empty
+// map, so InjectCopies falls back to the original behaviour of emitting
+// fresh dir headers rather than acting on a partial view of the tar.
 func scanExistingDirs(f *os.File) (map[string]struct{}, error) {
-	dirs := make(map[string]struct{})
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return nil, err
 	}
+	dirs := make(map[string]struct{})
 	tr := tar.NewReader(f)
 	for {
 		hdr, err := tr.Next()
@@ -368,21 +368,23 @@ func scanExistingDirs(f *os.File) (map[string]struct{}, error) {
 			break
 		}
 		if err != nil {
-			// Stop scanning on a malformed entry but keep whatever we
-			// collected so far — a partial set is still better than
-			// silently re-emitting dirs we already saw.
+			// Malformed tail — discard partial results and fall back to
+			// the original behaviour (re-emit fresh dir headers).
+			dirs = make(map[string]struct{})
 			break
 		}
-		if hdr.Typeflag == tar.TypeDir {
-			name := strings.TrimSuffix(filepath.ToSlash(hdr.Name), "/")
-			name = strings.TrimPrefix(name, "./")
-			name = strings.TrimPrefix(name, "/")
-			name = path.Clean(name)
-			if name == "" || name == "." {
-				continue
-			}
-			dirs[name] = struct{}{}
+		if hdr.Typeflag != tar.TypeDir {
+			continue
 		}
+		name := normalizeTarName(hdr.Name)
+		// Defensively ignore entries that canonicalise to nothing or
+		// escape the tar root (e.g. "a/../../b"): treating those as
+		// "already present" could suppress legitimate parent-dir
+		// headers further down.
+		if name == "" || name == ".." || strings.HasPrefix(name, "../") {
+			continue
+		}
+		dirs[name] = struct{}{}
 	}
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return nil, err
