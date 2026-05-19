@@ -234,6 +234,52 @@ users:
 	}
 }
 
+// Profiles often want a single template that targets per-host paths under
+// /home/$USERNAME via files: and deletes:. Both fields should expand
+// %NAME% / $NAME / ${NAME} the same way users.* does so the YAML stays
+// portable across operators whose Windows username differs from one
+// another.
+func TestLoadProfile_ExpandsFilesDstAndDeletesEnvVars(t *testing.T) {
+	t.Setenv("OCI_TO_WSL_TEST_USER", "alice")
+	srcDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(srcDir, "marker"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("seed src: %v", err)
+	}
+	yaml := `
+name: test
+image: ubuntu:22.04
+files:
+  - src: ` + srcDir + `
+    dst: "/home/%OCI_TO_WSL_TEST_USER%/.azure"
+  - src: ` + srcDir + `
+    dst: "/home/${OCI_TO_WSL_TEST_USER}/code"
+deletes:
+  - "/home/$OCI_TO_WSL_TEST_USER/.cache"
+  - "/etc/skel/%OCI_TO_WSL_TEST_USER%.conf"
+`
+	p := writeAndLoad(t, yaml)
+
+	if len(p.Files) != 2 {
+		t.Fatalf("expected 2 files, got %d", len(p.Files))
+	}
+	if p.Files[0].Dst != "/home/alice/.azure" {
+		t.Errorf("Files[0].Dst: got %q, want /home/alice/.azure", p.Files[0].Dst)
+	}
+	if p.Files[1].Dst != "/home/alice/code" {
+		t.Errorf("Files[1].Dst: got %q, want /home/alice/code", p.Files[1].Dst)
+	}
+
+	if len(p.Deletes) != 2 {
+		t.Fatalf("expected 2 deletes, got %d", len(p.Deletes))
+	}
+	if p.Deletes[0] != "/home/alice/.cache" {
+		t.Errorf("Deletes[0]: got %q, want /home/alice/.cache", p.Deletes[0])
+	}
+	if p.Deletes[1] != "/etc/skel/alice.conf" {
+		t.Errorf("Deletes[1]: got %q, want /etc/skel/alice.conf", p.Deletes[1])
+	}
+}
+
 func TestLoadProfile_FilesReplaceDefaultAndExplicit(t *testing.T) {
 	yaml := `
 name: replace-distro

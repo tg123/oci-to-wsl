@@ -54,6 +54,12 @@ type FileEntry struct {
 	// must be absolute (start with "/"). For a directory source, the
 	// directory itself is created at Dst and its contents are placed
 	// underneath. For a file source, Dst is the resulting file path.
+	// Windows %VAR%, POSIX $VAR / ${VAR} environment variable references
+	// are expanded at profile-load time so a single profile can target
+	// per-host paths like /home/%USERNAME%/.config. Unlike Src, a
+	// leading ~ is NOT expanded — Dst always lives inside the guest
+	// rootfs, so ~ would be ambiguous (the operator's host home, or the
+	// guest user's home?).
 	Dst string `yaml:"dst"`
 
 	// Mode is an optional file mode for the destination, expressed as an
@@ -208,7 +214,10 @@ type Profile struct {
 	// recursively (every entry under that prefix is dropped). Missing
 	// paths are silently ignored. Deletes are applied before Files, so
 	// a profile may delete an upstream directory and then stage its own
-	// replacement at the same destination.
+	// replacement at the same destination. Each entry is host-env
+	// expanded at profile-load time (same %VAR% / $VAR / ${VAR} rules
+	// as Files.Dst) so a single profile can target paths like
+	// /home/%USERNAME%/.cache across operators.
 	Deletes []string `yaml:"deletes"`
 
 	// Users is a list of Linux user accounts to create by editing
@@ -414,6 +423,15 @@ func LoadProfile(path string) (*Profile, error) {
 			src = filepath.Join(baseDir, src)
 		}
 		p.Files[i].Src = src
+		p.Files[i].Dst = ExpandEnvVars(p.Files[i].Dst)
+	}
+
+	// Expand %NAME% / $NAME in `deletes` so a single profile can target
+	// host-templated paths (e.g. /home/%USERNAME%/...). InitCmds are
+	// deliberately NOT expanded because shell scripts there use $VAR and
+	// ${VAR} for runtime values that must survive YAML load unchanged.
+	for i := range p.Deletes {
+		p.Deletes[i] = ExpandEnvVars(p.Deletes[i])
 	}
 
 	// Expand environment variables in wsl_conf content so users can write

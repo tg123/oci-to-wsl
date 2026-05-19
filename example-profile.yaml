@@ -27,13 +27,15 @@ install_dir: C:\WSL\my-ubuntu
 # profile. Windows %VAR% (e.g. %USERPROFILE%, %APPDATA%), POSIX $VAR /
 # ${VAR} and a leading ~ are expanded in 'src'. Native Windows paths like
 # C:\Users\me\file are accepted. 'dst' must be an absolute POSIX path
-# (start with '/'). 'mode' is optional and is baked into the tar header
-# (no chmod step runs inside the distribution); for a directory source it
-# applies recursively to all regular files; for inline content it defaults
-# to 0644. 'replace' is optional and defaults to true: any existing entry
-# at 'dst' in the upstream rootfs tar is dropped before the file is staged
-# (for a directory 'dst' the whole subtree is removed). Set 'replace:
-# false' to overlay onto the existing tree instead.
+# (start with '/') and supports the same %VAR% / $VAR / ${VAR} host-env
+# expansion as 'src' so a single profile can target per-host paths such as
+# /home/%USERNAME%/.config. 'mode' is optional and is baked into the tar
+# header (no chmod step runs inside the distribution); for a directory
+# source it applies recursively to all regular files; for inline content
+# it defaults to 0644. 'replace' is optional and defaults to true: any
+# existing entry at 'dst' in the upstream rootfs tar is dropped before the
+# file is staged (for a directory 'dst' the whole subtree is removed). Set
+# 'replace: false' to overlay onto the existing tree instead.
 files:
   - src: ./scripts/bootstrap.sh
     dst: /usr/local/bin/bootstrap.sh
