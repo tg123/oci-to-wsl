@@ -230,6 +230,43 @@ users:
 			},
 		},
 		{
+			// Regression: when a profile both creates a user and stages
+			// files under that user's home, /home/<name> must remain
+			// owned by the new user. Earlier InjectCopies re-emitted the
+			// parent directory header as root:root 0755, leaving the
+			// user unable to write to their own home on first login.
+			name:   "files_under_user_home_preserve_ownership",
+			distro: "e2e-home-ownership",
+			setup: func(t *testing.T, workDir string) []string {
+				mustMkdir(t, filepath.Join(workDir, "dotazure"))
+				mustWrite(t, filepath.Join(workDir, "dotazure", "config"), "azure-config-from-host")
+
+				profile := `name: e2e-home-ownership
+image: alpine:latest
+users:
+  - name: bob
+    shell: /bin/sh
+files:
+  - src: ./dotazure
+    dst: /home/bob/.azure
+`
+				profilePath := filepath.Join(workDir, "profile.yaml")
+				mustWrite(t, profilePath, profile)
+
+				installDir := filepath.Join(workDir, "wsl-e2e-home-ownership")
+				return []string{"--profile", profilePath, "--dir", installDir}
+			},
+			verifies: []verify{
+				{name: "bob_home_owned_by_bob", script: "stat -c '%U' /home/bob", want: "bob"},
+				{name: "bob_home_mode", script: "stat -c '%a' /home/bob", want: "700"},
+				{name: "azure_dir_present", script: "test -d /home/bob/.azure && echo ok", want: "ok"},
+				{name: "azure_config_content", script: "cat /home/bob/.azure/config", want: "azure-config-from-host"},
+				// The exact ownership-on-first-login symptom from the bug
+				// report: bob must be able to write to his own home dir.
+				{name: "bob_can_write_home", script: "su -s /bin/sh bob -c 'touch /home/bob/.ownership-probe && stat -c %U /home/bob/.ownership-probe'", want: "bob"},
+			},
+		},
+		{
 			// Default replace=true: the staged directory at /etc/apk fully
 			// replaces the upstream subtree, so alpine's stock
 			// /etc/apk/repositories must NOT be present.
