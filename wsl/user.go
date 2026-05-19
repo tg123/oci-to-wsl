@@ -246,7 +246,6 @@ func mergeUsers(passwd, shadow, group accountFile, users []UserEntry) (
 	shadowLines := splitLines(shadow.body)
 	groupLines := splitLines(group.body)
 
-	existingPasswd := map[string]int{}
 	passwdHas := map[string]struct{}{}
 	usedUIDs := map[int]struct{}{}
 	for _, l := range passwdLines {
@@ -259,7 +258,6 @@ func mergeUsers(passwd, shadow, group accountFile, users []UserEntry) (
 		passwdHas[fields[0]] = struct{}{}
 		if uid, perr := strconv.Atoi(fields[2]); perr == nil {
 			usedUIDs[uid] = struct{}{}
-			existingPasswd[fields[0]] = uid
 		}
 	}
 	shadowHas := map[string][]int{}
@@ -364,7 +362,6 @@ func mergeUsers(passwd, shadow, group accountFile, users []UserEntry) (
 			shell = "/bin/sh"
 		}
 		passwdLines = append(passwdLines, fmt.Sprintf("%s:x:%d:%d:%s:%s:%s", name, uid, gid, u.Gecos, home, shell))
-		existingPasswd[name] = uid
 		passwdHas[name] = struct{}{}
 
 		hash := u.PasswordHash
@@ -477,7 +474,7 @@ func validateHomePath(h string) error {
 	}
 	cleaned := path.Clean(d)
 	trimmed := strings.TrimPrefix(cleaned, "/")
-	if trimmed == "" || trimmed == "." || trimmed == ".." || strings.HasPrefix(trimmed, "../") {
+	if trimmed == "" || trimmed == "." || strings.HasPrefix(trimmed, "..") {
 		return fmt.Errorf("home %q resolves outside the rootfs", h)
 	}
 	return nil
