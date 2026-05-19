@@ -42,7 +42,7 @@ func TestE2ESaveTarNoTarMods(t *testing.T) {
 
 	profile := `name: e2e-no-tar-mods
 image: alpine:latest
-copies:
+files:
   - src: ./assets/marker.txt
     dst: /opt/marker.txt
     mode: "0644"

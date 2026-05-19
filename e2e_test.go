@@ -141,7 +141,7 @@ func TestE2E(t *testing.T) {
 
 				profile := `name: e2e-copy
 image: alpine:latest
-copies:
+files:
   - src: ./scripts/bootstrap.sh
     dst: /usr/local/bin/bootstrap.sh
     mode: "0755"
@@ -223,6 +223,94 @@ users:
 			},
 		},
 		{
+			// Default replace=true: the staged directory at /etc/apk fully
+			// replaces the upstream subtree, so alpine's stock
+			// /etc/apk/repositories must NOT be present.
+			name:   "files_replace_default_drops_upstream",
+			distro: "e2e-replace-default",
+			setup: func(t *testing.T, workDir string) []string {
+				mustMkdir(t, filepath.Join(workDir, "apk-replacement"))
+				mustWrite(t, filepath.Join(workDir, "apk-replacement", "marker.txt"), "replace-marker")
+
+				profile := `name: e2e-replace-default
+image: alpine:latest
+files:
+  - src: ./apk-replacement
+    dst: /etc/apk
+`
+				profilePath := filepath.Join(workDir, "profile.yaml")
+				mustWrite(t, profilePath, profile)
+
+				installDir := filepath.Join(workDir, "wsl-e2e-replace-default")
+				return []string{"--profile", profilePath, "--dir", installDir}
+			},
+			verifies: []verify{
+				{name: "marker_present", script: "cat /etc/apk/marker.txt", want: "replace-marker"},
+				// `test ! -e` succeeds (exit 0) only when the file is
+				// absent — exactly what we want for the default replace.
+				{name: "upstream_repositories_gone", script: "test ! -e /etc/apk/repositories"},
+			},
+		},
+		{
+			// Explicit replace=false: the staged directory at /etc/apk
+			// overlays onto the upstream subtree, so alpine's stock
+			// /etc/apk/repositories must still be present.
+			name:   "files_replace_false_preserves_upstream",
+			distro: "e2e-replace-false",
+			setup: func(t *testing.T, workDir string) []string {
+				mustMkdir(t, filepath.Join(workDir, "apk-replacement"))
+				mustWrite(t, filepath.Join(workDir, "apk-replacement", "marker.txt"), "replace-marker")
+
+				profile := `name: e2e-replace-false
+image: alpine:latest
+files:
+  - src: ./apk-replacement
+    dst: /etc/apk
+    replace: false
+`
+				profilePath := filepath.Join(workDir, "profile.yaml")
+				mustWrite(t, profilePath, profile)
+
+				installDir := filepath.Join(workDir, "wsl-e2e-replace-false")
+				return []string{"--profile", profilePath, "--dir", installDir}
+			},
+			verifies: []verify{
+				{name: "marker_present", script: "cat /etc/apk/marker.txt", want: "replace-marker"},
+				{name: "upstream_repositories_present", script: "test -s /etc/apk/repositories"},
+			},
+		},
+		{
+			// Inline content / content_base64: no host file is read; the
+			// body comes straight from the profile YAML.
+			name:   "files_inline_content",
+			distro: "e2e-content",
+			setup: func(t *testing.T, workDir string) []string {
+				// "binary-from-base64\n" base64-encoded.
+				profile := `name: e2e-content
+image: alpine:latest
+files:
+  - dst: /etc/motd
+    content: |
+      inline-motd-from-profile
+    mode: "0644"
+  - dst: /opt/binary.bin
+    content_base64: YmluYXJ5LWZyb20tYmFzZTY0Cg==
+    mode: "0600"
+`
+				profilePath := filepath.Join(workDir, "profile.yaml")
+				mustWrite(t, profilePath, profile)
+
+				installDir := filepath.Join(workDir, "wsl-e2e-content")
+				return []string{"--profile", profilePath, "--dir", installDir}
+			},
+			verifies: []verify{
+				{name: "motd_content", script: "cat /etc/motd", wantSub: "inline-motd-from-profile"},
+				{name: "motd_mode", script: "stat -c '%a' /etc/motd", want: "644"},
+				{name: "binary_content", script: "cat /opt/binary.bin", want: "binary-from-base64"},
+				{name: "binary_mode", script: "stat -c '%a' /opt/binary.bin", want: "600"},
+			},
+		},
+		{
 			name:   "profile_wsl_conf_ini_content",
 			distro: "e2e-wslconf",
 			setup: func(t *testing.T, workDir string) []string {
@@ -253,12 +341,12 @@ wsl_conf:
 			},
 			verifies: []verify{
 				{name: "wsl_conf_exists", script: "test -s /etc/wsl.conf && echo ok", want: "ok"},
-				{name: "env_var_expanded", script: "cat /etc/wsl.conf", wantSub: "default=alice"},
+				{name: "env_var_expanded", script: "cat /etc/wsl.conf | tr -d ' '", wantSub: "default=alice"},
 				{name: "no_unexpanded_token", script: "grep -c WSL_CONF_E2E_USER /etc/wsl.conf || true", want: "0"},
 				{name: "boot_section", script: "cat /etc/wsl.conf", wantSub: "[boot]"},
-				{name: "systemd_false", script: "cat /etc/wsl.conf", wantSub: "systemd=false"},
+				{name: "systemd_false", script: "cat /etc/wsl.conf | tr -d ' '", wantSub: "systemd=false"},
 				{name: "interop_section", script: "cat /etc/wsl.conf", wantSub: "[interop]"},
-				{name: "append_windows_path", script: "cat /etc/wsl.conf", wantSub: "appendWindowsPath=false"},
+				{name: "append_windows_path", script: "cat /etc/wsl.conf | tr -d ' '", wantSub: "appendWindowsPath=false"},
 			},
 		},
 		{
