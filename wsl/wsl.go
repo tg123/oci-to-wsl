@@ -28,6 +28,14 @@ import (
 // names before constructing the command.
 var envVarNameRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
+// runAsUserRE matches a conservative POSIX username (the NAME_REGEX
+// used by adduser/useradd: lowercase letter or underscore, followed
+// by lowercase letters/digits/underscores/hyphens, optionally ending
+// in `$`). The value is interpolated into `su <name> -c '...'`, so a
+// name with whitespace or shell metacharacters could inject extra
+// arguments or statements; RunCommand rejects such values up front.
+var runAsUserRE = regexp.MustCompile(`^[a-z_][a-z0-9_-]*\$?$`)
+
 // ImportOptions controls how a WSL distribution is created.
 type ImportOptions struct {
 	// Name is the WSL distribution name.
@@ -134,9 +142,6 @@ func RunCommand(distro, command string, opts RunOptions) error {
 	if len(opts.Env) > 0 {
 		var b strings.Builder
 		for _, e := range opts.Env {
-			if e.Name == "" {
-				continue
-			}
 			if !envVarNameRE.MatchString(e.Name) {
 				return fmt.Errorf("invalid env var name %q: must match [A-Za-z_][A-Za-z0-9_]*", e.Name)
 			}
@@ -158,6 +163,9 @@ func RunCommand(distro, command string, opts RunOptions) error {
 	// imported OCI rootfs.
 	full := body
 	if opts.RunAs != "" {
+		if !runAsUserRE.MatchString(opts.RunAs) {
+			return fmt.Errorf("invalid run_as user %q: must match [a-z_][a-z0-9_-]*\\$?", opts.RunAs)
+		}
 		full = "su " + opts.RunAs + " -c " + shellSingleQuote(body)
 	}
 
