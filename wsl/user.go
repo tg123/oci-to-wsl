@@ -114,6 +114,15 @@ func ApplyUsers(tarPath string, users []UserEntry) error {
 			if err := validateHomePath(u.Home); err != nil {
 				return fmt.Errorf("user %q: %w", name, err)
 			}
+		} else {
+			// Validate the computed default home too: a name like ".."
+			// or "a/../b" would otherwise produce a default that
+			// path.Clean resolves to "/" or escapes the home subtree,
+			// and with NoCreateHome=true the later toTarPath check is
+			// skipped entirely.
+			if err := validateHomePath("/home/" + name); err != nil {
+				return fmt.Errorf("user %q: %w", name, err)
+			}
 		}
 		if u.Shell != "" {
 			if err := validateAccountField("shell", u.Shell); err != nil {
@@ -200,7 +209,7 @@ func readAccountFiles(tarPath string) (passwd, shadow, group accountFile, err er
 			err = fmt.Errorf("reading tar entry: %w", herr)
 			return
 		}
-		if hdr.Typeflag != tar.TypeReg {
+		if hdr.Typeflag != tar.TypeReg && hdr.Typeflag != tar.TypeRegA {
 			continue
 		}
 		name := normalizeTarName(hdr.Name)
@@ -654,7 +663,7 @@ func rewriteTarWithAccounts(
 			noteParents(name)
 		}
 		var sub *accountFile
-		if hdr.Typeflag == tar.TypeReg {
+		if hdr.Typeflag == tar.TypeReg || hdr.Typeflag == tar.TypeRegA {
 			switch name {
 			case tarEtcPasswd:
 				sub = &newPasswd
