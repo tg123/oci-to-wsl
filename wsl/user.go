@@ -209,7 +209,7 @@ func readAccountFiles(tarPath string) (passwd, shadow, group accountFile, err er
 			err = fmt.Errorf("reading tar entry: %w", herr)
 			return
 		}
-		if hdr.Typeflag != tar.TypeReg && hdr.Typeflag != tar.TypeRegA {
+		if hdr.Typeflag != tar.TypeReg && hdr.Typeflag != tar.TypeRegA { //nolint:staticcheck // TypeRegA is the legacy NUL form still seen in older tars
 			continue
 		}
 		name := normalizeTarName(hdr.Name)
@@ -663,7 +663,7 @@ func rewriteTarWithAccounts(
 			noteParents(name)
 		}
 		var sub *accountFile
-		if hdr.Typeflag == tar.TypeReg || hdr.Typeflag == tar.TypeRegA {
+		if hdr.Typeflag == tar.TypeReg || hdr.Typeflag == tar.TypeRegA { //nolint:staticcheck // TypeRegA is the legacy NUL form still seen in older tars
 			switch name {
 			case tarEtcPasswd:
 				sub = &newPasswd
