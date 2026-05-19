@@ -151,8 +151,8 @@ func action(_ context.Context, cmd *cli.Command) error {
 }
 
 func loadProfile(profile *config.Profile, saveTar string) error {
-	if profile.Image == "" {
-		return fmt.Errorf("profile: 'image' is required")
+	if err := profile.Validate(); err != nil {
+		return fmt.Errorf("profile: %w", err)
 	}
 	if saveTar == "" && profile.Name == "" {
 		return fmt.Errorf("profile: 'name' is required")
@@ -206,24 +206,34 @@ func loadProfile(profile *config.Profile, saveTar string) error {
 
 	slog.Debug("rootfs tar staged", "path", tarPath, "save_tar_mode", saveTar != "")
 
-	// Apply any profile-driven deletions before staging copies, so a
+	// Apply any profile-driven deletions before staging files, so a
 	// profile can drop an upstream directory and then place its own
-	// replacement at the same destination.
+	// replacement at the same destination. File entries with
+	// `replace: true` (the default) implicitly contribute their Dst to
+	// this delete list, so a staged file fully replaces whatever the
+	// upstream image had at the same path rather than overlaying onto it.
 	//
 	// These tar modifications run in both WSL-import and --save-tar
 	// modes. Set OCI_TO_WSL_NO_TAR_MODS=1 to skip them and obtain the
 	// rootfs tar exactly as exported from the image (most useful with
 	// --save-tar when you want an unmodified artifact).
+	deletes := append([]string(nil), profile.Deletes...)
+	for _, f := range profile.Files {
+		if f.Dst != "" && f.ReplaceEnabled() {
+			deletes = append(deletes, f.Dst)
+		}
+	}
 	skipTarMods := isTarModsDisabled()
-	if skipTarMods && (len(profile.Deletes) > 0 || len(profile.Copies) > 0 || len(profile.Users) > 0) {
+	if skipTarMods && (len(deletes) > 0 || len(profile.Files) > 0 || len(profile.Users) > 0) {
 		// Print directly to stderr so this notice is not suppressed
 		// by --loglevel error; it reflects a user-requested
 		// behavioural change that should always be visible.
-		fmt.Fprintf(os.Stderr, "OCI_TO_WSL_NO_TAR_MODS is set; skipping profile 'deletes' (%d), 'users' (%d) and 'copies' (%d) tar modifications\n",
-			len(profile.Deletes), len(profile.Users), len(profile.Copies))
+		fmt.Fprintf(os.Stderr, "OCI_TO_WSL_NO_TAR_MODS is set; skipping profile 'deletes' (%d), 'users' (%d) and 'files' (%d) tar modifications\n",
+			len(deletes), len(profile.Users), len(profile.Files))
 	}
-	if !skipTarMods && len(profile.Deletes) > 0 {
-		if err := wsl.ApplyDeletes(tarPath, profile.Deletes); err != nil {
+	if !skipTarMods && len(deletes) > 0 {
+		slog.Debug("applying profile deletes", "count", len(deletes))
+		if err := wsl.ApplyDeletes(tarPath, deletes); err != nil {
 			return fmt.Errorf("applying deletes to rootfs tar: %w", err)
 		}
 	}
@@ -261,16 +271,18 @@ func loadProfile(profile *config.Profile, saveTar string) error {
 	// they are present in the distribution as soon as wsl.exe --import
 	// finishes, before any init_cmds run. This avoids any dependency on a
 	// tar binary inside the container.
-	if !skipTarMods && len(profile.Copies) > 0 {
-		injects := make([]wsl.CopyEntry, 0, len(profile.Copies))
-		for _, c := range profile.Copies {
-			if c.Src == "" || c.Dst == "" {
-				return fmt.Errorf("profile copies: both 'src' and 'dst' are required")
+	if !skipTarMods && len(profile.Files) > 0 {
+		slog.Debug("staging profile files into rootfs tar", "count", len(profile.Files))
+		injects := make([]wsl.CopyEntry, 0, len(profile.Files))
+		for _, f := range profile.Files {
+			ce, err := fileEntryToCopy(f)
+			if err != nil {
+				return err
 			}
-			injects = append(injects, wsl.CopyEntry{Src: c.Src, Dst: c.Dst, Mode: c.Mode})
+			injects = append(injects, ce)
 		}
 		if err := wsl.InjectCopies(tarPath, injects); err != nil {
-			return fmt.Errorf("staging copies into rootfs tar: %w", err)
+			return fmt.Errorf("staging files into rootfs tar: %w", err)
 		}
 	}
 
@@ -323,9 +335,27 @@ func loadProfile(profile *config.Profile, saveTar string) error {
 	return nil
 }
 
+// fileEntryToCopy translates a profile FileEntry into the wsl.CopyEntry
+// form consumed by InjectCopies. The caller is expected to have run
+// Profile.Validate() (or FileEntry.Validate()) first, so well-formedness
+// is assumed and any base64 payload has already been decoded and cached
+// on the entry.
+func fileEntryToCopy(f config.FileEntry) (wsl.CopyEntry, error) {
+	switch {
+	case f.Src != "":
+		return wsl.CopyEntry{Src: f.Src, Dst: f.Dst, Mode: f.Mode}, nil
+	case f.Content != nil:
+		return wsl.CopyEntry{Data: []byte(*f.Content), Dst: f.Dst, Mode: f.Mode}, nil
+	case f.ContentBase64 != nil:
+		return wsl.CopyEntry{Data: f.DecodedContentBase64(), Dst: f.Dst, Mode: f.Mode}, nil
+	default:
+		return wsl.CopyEntry{}, fmt.Errorf("profile files: %q: no source set (call Profile.Validate first)", f.Dst)
+	}
+}
+
 // envDisableTarMods, when set to a value parseable as true by strconv.ParseBool
 // (e.g. "1", "t", "true", "True", "TRUE"), skips the profile-driven tar
-// modifications (`deletes` and `copies`) so the rootfs tar is left exactly
+// modifications (`deletes` and `files`) so the rootfs tar is left exactly
 // as exported from the image. Most useful in --save-tar mode when an
 // unmodified artifact is desired.
 const envDisableTarMods = "OCI_TO_WSL_NO_TAR_MODS"

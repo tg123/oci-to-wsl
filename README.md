@@ -96,16 +96,23 @@ inputs (verified by a unit test).
 name: my-ubuntu
 image: ubuntu:22.04
 install_dir: C:\WSL\my-ubuntu   # optional – defaults to .\<name>
-copies:                          # optional – injected into the rootfs tar so files exist on first boot
+files:                           # optional – injected into the rootfs tar so files exist on first boot
   - src: ./scripts/bootstrap.sh  # relative paths resolve to the profile's directory
     dst: /usr/local/bin/bootstrap.sh
     mode: "0755"                 # optional – octal, e.g. "0755" or "777"
   - src: C:\Users\me\assets      # native Windows paths are accepted
     dst: /opt/assets
+    replace: false               # optional – default true; false overlays onto the upstream tree instead of replacing it
   - src: '%USERPROFILE%\.gitconfig'  # %VAR%, $VAR / ${VAR} and a leading ~ are expanded
     dst: /root/.gitconfig
+  - dst: /etc/motd               # inline UTF-8 body in place of 'src'
+    content: |
+      Welcome to my-ubuntu
+  - dst: /opt/secret.bin         # inline binary body, base64-encoded
+    content_base64: aGVsbG8gd29ybGQK
+    mode: "0600"
 deletes:                         # optional – absolute POSIX paths dropped from the rootfs tar before import
-  - /var/cache/apt               # directories are removed recursively; applied before `copies`
+  - /var/cache/apt               # directories are removed recursively; applied before `files`
   - /etc/motd
 users:                           # optional – Linux users created by editing /etc/passwd, /etc/shadow, /etc/group
   - name: "%USERNAME%"           # required; %VAR% / $VAR / ${VAR} expanded from host env (e.g. mirror Windows login into WSL)
