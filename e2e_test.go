@@ -220,6 +220,13 @@ users:
 				// skips emitting a corrective trailing header).
 				{name: "alice_can_write_home", script: "su -s /bin/sh alice -c 'touch /home/alice/.ownership-probe && stat -c %U /home/alice/.ownership-probe'", want: "alice"},
 				{name: "bob_can_write_home", script: "su -s /bin/sh bob -c 'touch /home/bob/.ownership-probe && stat -c %U /home/bob/.ownership-probe'", want: "bob"},
+				// Isolation: alice (uid 1500, mode-0700 home) must not
+				// be able to write into bob's mode-0700 home or into
+				// root-owned /root. This guards against ApplyUsers
+				// regressing home ownership/permissions back to
+				// world-writable or to the wrong uid.
+				{name: "alice_cannot_write_bob_home", script: "su -s /bin/sh alice -c 'if touch /home/bob/.intrusion-probe 2>/dev/null; then echo WROTE; else echo DENIED; fi'", want: "DENIED"},
+				{name: "alice_cannot_write_root_home", script: "su -s /bin/sh alice -c 'if touch /root/.intrusion-probe 2>/dev/null; then echo WROTE; else echo DENIED; fi'", want: "DENIED"},
 			},
 		},
 		{
