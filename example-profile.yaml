@@ -16,32 +16,80 @@ install_dir: C:\WSL\my-ubuntu
 
 # Optional: files or folders to stage into the new distribution by appending
 # them to the rootfs tar before `wsl --import` runs, so they are present on
-# first boot and visible to init_cmds. Relative 'src' paths are resolved
-# against the directory containing this profile. Windows %VAR% (e.g.
-# %USERPROFILE%, %APPDATA%), POSIX $VAR / ${VAR} and a leading ~ are expanded
-# in 'src'. Native Windows paths like C:\Users\me\file are accepted. 'dst'
-# must be an absolute POSIX path (start with '/'). 'mode' is optional and is
-# baked into the tar header (no chmod step runs inside the distribution);
-# for a directory source it applies recursively to all regular files.
-copies:
+# first boot and visible to init_cmds.
+#
+# Each entry must supply exactly one source of data:
+#   * 'src'            - read from a host file or directory
+#   * 'content'        - inline UTF-8 file body (single regular file)
+#   * 'content_base64' - inline base64-encoded file body (use for binary)
+#
+# Relative 'src' paths are resolved against the directory containing this
+# profile. Windows %VAR% (e.g. %USERPROFILE%, %APPDATA%), POSIX $VAR /
+# ${VAR} and a leading ~ are expanded in 'src'. Native Windows paths like
+# C:\Users\me\file are accepted. 'dst' must be an absolute POSIX path
+# (start with '/'). 'mode' is optional and is baked into the tar header
+# (no chmod step runs inside the distribution); for a directory source it
+# applies recursively to all regular files; for inline content it defaults
+# to 0644. 'replace' is optional and defaults to true: any existing entry
+# at 'dst' in the upstream rootfs tar is dropped before the file is staged
+# (for a directory 'dst' the whole subtree is removed). Set 'replace:
+# false' to overlay onto the existing tree instead.
+files:
   - src: ./scripts/bootstrap.sh
     dst: /usr/local/bin/bootstrap.sh
     mode: "0755"
   - src: C:\Users\me\assets
     dst: /opt/assets
     mode: "0777"
+    replace: false               # overlay onto the existing /opt/assets instead of replacing it
   - src: '%USERPROFILE%\.ssh\id_rsa.pub'
     dst: /root/.ssh/authorized_keys
+    mode: "0600"
+  - dst: /etc/motd               # inline UTF-8 body, no host file involved
+    content: |
+      Welcome to my-ubuntu
+  - dst: /opt/secret.bin         # inline binary body (base64-encoded)
+    # Decodes to the 8-byte PNG file signature (89 50 4E 47 0D 0A 1A 0A) —
+    # not valid UTF-8, which is exactly when `content_base64:` should be
+    # preferred over `content:`.
+    content_base64: iVBORw0KGgo=
     mode: "0600"
 
 # Optional: absolute POSIX paths to remove from the rootfs tar before
 # `wsl --import` runs. Files and directories are both supported; directories
 # are removed recursively. Missing paths are silently ignored. Deletes are
-# applied before `copies`, so you can drop an upstream directory and stage
+# applied before `files`, so you can drop an upstream directory and stage
 # your own replacement at the same destination.
 deletes:
   - /var/cache/apt
   - /etc/motd
+
+# Optional: Linux users created by editing /etc/passwd, /etc/shadow and
+# /etc/group directly in the rootfs tar (no useradd/adduser is invoked
+# inside the container). Users are applied after `deletes` and before
+# `copies`, so the account exists on first boot and a `copy` targeting the
+# user's home directory overlays onto the directory created here. `uid` and
+# `gid` are auto-allocated from 1000+ when omitted. `password_hash` is
+# written verbatim into /etc/shadow; generate one with e.g.
+# `openssl passwd -6`. Alternatively, set `password_plain` and the tool
+# will hash it with SHA-512 crypt before writing (mutually exclusive with
+# `password_hash`). String fields (`name`, `home`, `shell`, `gecos`, `groups`,
+# `password_plain`) support Windows %NAME% and POSIX $NAME / ${NAME}
+# environment-variable references that are expanded against the host at load
+# time — handy for mirroring the current Windows login into the distro, e.g.
+# `name: "%USERNAME%"` or `name: "$USER"`. Supplementary `groups` that don't
+# exist in the image are silently skipped so a profile stays portable across
+# base images.
+users:
+  - name: "%USERNAME%"
+    shell: /bin/bash
+    gecos: "Alice Example"
+    groups: [sudo]
+    password_plain: "change-me"
+  - name: bob
+    uid: 1500
+    home: /srv/bob
+    password_hash: "$6$rounds=656000$abcdefghij$..."
 
 # Optional: shell commands to run inside the new WSL instance after import.
 # Each entry may be either a plain string (the command line) or a mapping

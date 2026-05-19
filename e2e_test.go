@@ -155,7 +155,7 @@ func TestE2E(t *testing.T) {
 				//      busybox `adduser -D`).
 				profile := `name: e2e-copy
 image: alpine:latest
-copies:
+files:
   - src: ./scripts/bootstrap.sh
     dst: /usr/local/bin/bootstrap.sh
     mode: "0755"
@@ -201,13 +201,191 @@ init_cmds:
 				{name: "init_read_asset", script: "cat /tmp/assets-hello", wantSub: "hello-from-host"},
 				// init_cmds env form: host_user was expanded against the
 				// Windows-side env at load time and exported in-distro,
-				// and a value containing `$dollar` is rewritten by the
-				// current ExpandHostEnv implementation when no host var exists.
+				// and `$$dollar` was rewritten by ExpandEnvVars to a
+				// literal `$dollar` (the `$$` escape for a literal `$`).
 				{name: "init_env_host_user", script: "cat /tmp/env-marker", wantSub: "host_user=alice-from-host"},
-				{name: "init_env_literal", script: "cat /tmp/env-marker", wantSub: "literal=with spaces and a ${dollar}"},
+				{name: "init_env_literal", script: "cat /tmp/env-marker", wantSub: "literal=with spaces and a $dollar"},
 				// init_cmds run_as form: the command ran as the
 				// in-distro user we created in the previous step.
 				{name: "init_run_as", script: "cat /tmp/whoami-marker", want: "e2euser"},
+			},
+		},
+		{
+			name:   "profile_users",
+			distro: "e2e-users",
+			setup: func(t *testing.T, workDir string) []string {
+				profile := `name: e2e-users
+image: alpine:latest
+users:
+  - name: alice
+    uid: 1500
+    gid: 1500
+    shell: /bin/sh
+    gecos: "Alice E2E"
+    groups: [wheel, doesnotexist]
+    password_hash: "!"
+  - name: bob
+    shell: /bin/sh
+`
+				profilePath := filepath.Join(workDir, "profile.yaml")
+				mustWrite(t, profilePath, profile)
+
+				installDir := filepath.Join(workDir, "wsl-e2e-users")
+				return []string{
+					"--profile", profilePath,
+					"--dir", installDir,
+				}
+			},
+			verifies: []verify{
+				{name: "alice_passwd", script: "getent passwd alice", wantSub: "alice:x:1500:1500:Alice E2E:/home/alice:/bin/sh"},
+				{name: "alice_home_exists", script: "test -d /home/alice && stat -c '%u:%g:%a' /home/alice", want: "1500:1500:700"},
+				{name: "alice_shadow", script: "grep '^alice:' /etc/shadow", wantSub: "alice:!:"},
+				{name: "alice_in_wheel", script: "getent group wheel", wantSub: "alice"},
+				{name: "doesnotexist_not_created", script: "if getent group doesnotexist >/dev/null 2>&1; then echo CREATED; else echo MISSING; fi", want: "MISSING"},
+				{name: "bob_passwd", script: "getent passwd bob", wantSub: "bob:x:"},
+				{name: "bob_home_owned", script: "stat -c '%U' /home/bob", want: "bob"},
+				{name: "alice_can_su", script: "su -s /bin/sh alice -c 'id -un'", want: "alice"},
+				// Ownership-end-to-end: the new user must actually be
+				// able to write to their own home directory on first
+				// boot. This catches regressions where the home dir
+				// header lands in the tar with wrong uid/gid (e.g.,
+				// when the upstream rootfs already ships an explicit
+				// /home/<name> entry owned by root and ApplyUsers
+				// skips emitting a corrective trailing header).
+				{name: "alice_can_write_home", script: "su -s /bin/sh alice -c 'touch /home/alice/.ownership-probe && stat -c %U /home/alice/.ownership-probe'", want: "alice"},
+				{name: "bob_can_write_home", script: "su -s /bin/sh bob -c 'touch /home/bob/.ownership-probe && stat -c %U /home/bob/.ownership-probe'", want: "bob"},
+				// Isolation: alice (uid 1500, mode-0700 home) must not
+				// be able to write into bob's mode-0700 home or into
+				// root-owned /root. This guards against ApplyUsers
+				// regressing home ownership/permissions back to
+				// world-writable or to the wrong uid.
+				{name: "alice_cannot_write_bob_home", script: "su -s /bin/sh alice -c 'if touch /home/bob/.intrusion-probe 2>/dev/null; then echo WROTE; else echo DENIED; fi'", want: "DENIED"},
+				{name: "alice_cannot_write_root_home", script: "su -s /bin/sh alice -c 'if touch /root/.intrusion-probe 2>/dev/null; then echo WROTE; else echo DENIED; fi'", want: "DENIED"},
+			},
+		},
+		{
+			// Regression: when a profile both creates a user and stages
+			// files under that user's home, /home/<name> must remain
+			// owned by the new user. Earlier InjectCopies re-emitted the
+			// parent directory header as root:root 0755, leaving the
+			// user unable to write to their own home on first login.
+			name:   "files_under_user_home_preserve_ownership",
+			distro: "e2e-home-ownership",
+			setup: func(t *testing.T, workDir string) []string {
+				mustMkdir(t, filepath.Join(workDir, "dotazure"))
+				mustWrite(t, filepath.Join(workDir, "dotazure", "config"), "azure-config-from-host")
+
+				profile := `name: e2e-home-ownership
+image: alpine:latest
+users:
+  - name: bob
+    shell: /bin/sh
+files:
+  - src: ./dotazure
+    dst: /home/bob/.azure
+`
+				profilePath := filepath.Join(workDir, "profile.yaml")
+				mustWrite(t, profilePath, profile)
+
+				installDir := filepath.Join(workDir, "wsl-e2e-home-ownership")
+				return []string{"--profile", profilePath, "--dir", installDir}
+			},
+			verifies: []verify{
+				{name: "bob_home_owned_by_bob", script: "stat -c '%U' /home/bob", want: "bob"},
+				{name: "bob_home_mode", script: "stat -c '%a' /home/bob", want: "700"},
+				{name: "azure_dir_present", script: "test -d /home/bob/.azure && echo ok", want: "ok"},
+				{name: "azure_config_content", script: "cat /home/bob/.azure/config", want: "azure-config-from-host"},
+				// The exact ownership-on-first-login symptom from the bug
+				// report: bob must be able to write to his own home dir.
+				{name: "bob_can_write_home", script: "su -s /bin/sh bob -c 'touch /home/bob/.ownership-probe && stat -c %U /home/bob/.ownership-probe'", want: "bob"},
+			},
+		},
+		{
+			// Default replace=true: the staged directory at /etc/apk fully
+			// replaces the upstream subtree, so alpine's stock
+			// /etc/apk/repositories must NOT be present.
+			name:   "files_replace_default_drops_upstream",
+			distro: "e2e-replace-default",
+			setup: func(t *testing.T, workDir string) []string {
+				mustMkdir(t, filepath.Join(workDir, "apk-replacement"))
+				mustWrite(t, filepath.Join(workDir, "apk-replacement", "marker.txt"), "replace-marker")
+
+				profile := `name: e2e-replace-default
+image: alpine:latest
+files:
+  - src: ./apk-replacement
+    dst: /etc/apk
+`
+				profilePath := filepath.Join(workDir, "profile.yaml")
+				mustWrite(t, profilePath, profile)
+
+				installDir := filepath.Join(workDir, "wsl-e2e-replace-default")
+				return []string{"--profile", profilePath, "--dir", installDir}
+			},
+			verifies: []verify{
+				{name: "marker_present", script: "cat /etc/apk/marker.txt", want: "replace-marker"},
+				// `test ! -e` succeeds (exit 0) only when the file is
+				// absent — exactly what we want for the default replace.
+				{name: "upstream_repositories_gone", script: "test ! -e /etc/apk/repositories"},
+			},
+		},
+		{
+			// Explicit replace=false: the staged directory at /etc/apk
+			// overlays onto the upstream subtree, so alpine's stock
+			// /etc/apk/repositories must still be present.
+			name:   "files_replace_false_preserves_upstream",
+			distro: "e2e-replace-false",
+			setup: func(t *testing.T, workDir string) []string {
+				mustMkdir(t, filepath.Join(workDir, "apk-replacement"))
+				mustWrite(t, filepath.Join(workDir, "apk-replacement", "marker.txt"), "replace-marker")
+
+				profile := `name: e2e-replace-false
+image: alpine:latest
+files:
+  - src: ./apk-replacement
+    dst: /etc/apk
+    replace: false
+`
+				profilePath := filepath.Join(workDir, "profile.yaml")
+				mustWrite(t, profilePath, profile)
+
+				installDir := filepath.Join(workDir, "wsl-e2e-replace-false")
+				return []string{"--profile", profilePath, "--dir", installDir}
+			},
+			verifies: []verify{
+				{name: "marker_present", script: "cat /etc/apk/marker.txt", want: "replace-marker"},
+				{name: "upstream_repositories_present", script: "test -s /etc/apk/repositories"},
+			},
+		},
+		{
+			// Inline content / content_base64: no host file is read; the
+			// body comes straight from the profile YAML.
+			name:   "files_inline_content",
+			distro: "e2e-content",
+			setup: func(t *testing.T, workDir string) []string {
+				// "binary-from-base64\n" base64-encoded.
+				profile := `name: e2e-content
+image: alpine:latest
+files:
+  - dst: /etc/motd
+    content: |
+      inline-motd-from-profile
+    mode: "0644"
+  - dst: /opt/binary.bin
+    content_base64: YmluYXJ5LWZyb20tYmFzZTY0Cg==
+    mode: "0600"
+`
+				profilePath := filepath.Join(workDir, "profile.yaml")
+				mustWrite(t, profilePath, profile)
+
+				installDir := filepath.Join(workDir, "wsl-e2e-content")
+				return []string{"--profile", profilePath, "--dir", installDir}
+			},
+			verifies: []verify{
+				{name: "motd_content", script: "cat /etc/motd", wantSub: "inline-motd-from-profile"},
+				{name: "motd_mode", script: "stat -c '%a' /etc/motd", want: "644"},
+				{name: "binary_content", script: "cat /opt/binary.bin", want: "binary-from-base64"},
+				{name: "binary_mode", script: "stat -c '%a' /opt/binary.bin", want: "600"},
 			},
 		},
 		{
@@ -241,12 +419,12 @@ wsl_conf:
 			},
 			verifies: []verify{
 				{name: "wsl_conf_exists", script: "test -s /etc/wsl.conf && echo ok", want: "ok"},
-				{name: "env_var_expanded", script: "cat /etc/wsl.conf", wantSub: "default=alice"},
+				{name: "env_var_expanded", script: "cat /etc/wsl.conf | tr -d ' '", wantSub: "default=alice"},
 				{name: "no_unexpanded_token", script: "grep -c WSL_CONF_E2E_USER /etc/wsl.conf || true", want: "0"},
 				{name: "boot_section", script: "cat /etc/wsl.conf", wantSub: "[boot]"},
-				{name: "systemd_false", script: "cat /etc/wsl.conf", wantSub: "systemd=false"},
+				{name: "systemd_false", script: "cat /etc/wsl.conf | tr -d ' '", wantSub: "systemd=false"},
 				{name: "interop_section", script: "cat /etc/wsl.conf", wantSub: "[interop]"},
-				{name: "append_windows_path", script: "cat /etc/wsl.conf", wantSub: "appendWindowsPath=false"},
+				{name: "append_windows_path", script: "cat /etc/wsl.conf | tr -d ' '", wantSub: "appendWindowsPath=false"},
 			},
 		},
 		{

@@ -9,22 +9,35 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // CopyEntry describes a single file or directory on the host to be staged
 // inside the imported WSL distribution.
+//
+// Exactly one of Src or Data must be set. Src reads from the host
+// filesystem (and may be a file, directory, or symlink). Data carries an
+// inline file body, in which case a single regular file is materialised
+// at Dst with that content — no host filesystem access is performed.
 type CopyEntry struct {
 	// Src is a host path to a file, directory, or symlink. It may be
 	// absolute or relative; the caller is responsible for resolving any
 	// relative paths (e.g. against the profile file directory) before
 	// passing the entry to InjectCopies. Environment variables and a
-	// leading ~ are NOT expanded here.
+	// leading ~ are NOT expanded here. Leave empty when supplying
+	// inline bytes via Data.
 	Src string
+
+	// Data, when non-nil, is an inline file body written verbatim to Dst
+	// as a single regular file. An empty but non-nil slice produces a
+	// zero-byte file. Mutually exclusive with Src.
+	Data []byte
 
 	// Dst is the POSIX path inside the distribution where Src will be
 	// placed. It must be absolute (start with "/"). For a directory Src,
 	// the directory itself is created at Dst and its contents are written
-	// underneath; for a file Src, Dst is the resulting file path.
+	// underneath; for a file Src or inline Data, Dst is the resulting
+	// file path.
 	Dst string
 
 	// Mode, when non-empty, is an octal string (e.g. "0755", "777") baked
@@ -32,6 +45,7 @@ type CopyEntry struct {
 	// materialises Src at that mode without any chmod step inside the
 	// distribution. For a directory source it is applied to the directory
 	// and every regular file written under Dst (i.e. effectively recursive).
+	// For inline Data, defaults to 0644 when unset.
 	Mode string
 }
 
@@ -55,6 +69,17 @@ func InjectCopies(tarPath string, entries []CopyEntry) error {
 	}
 	defer func() { _ = f.Close() }()
 
+	// Scan the existing tar for directory entries so we don't emit
+	// duplicate parent-dir headers below. Re-emitting a directory header
+	// that the source tar (or an earlier ApplyUsers pass) already wrote
+	// causes wsl.exe --import to apply the *later* header's mode/owner,
+	// which clobbers e.g. /home/<user> back to root:root 0755 whenever a
+	// file is staged underneath it.
+	addedDirs, err := scanExistingDirs(f)
+	if err != nil {
+		return fmt.Errorf("scan existing dirs in %q: %w", tarPath, err)
+	}
+
 	// Strip the trailing two 512-byte zero blocks written by tar.Writer.Close
 	// so the new entries are appended in-stream rather than after EOF.
 	if err := truncateTarTrailer(f); err != nil {
@@ -64,15 +89,15 @@ func InjectCopies(tarPath string, entries []CopyEntry) error {
 		return fmt.Errorf("seek end of %q: %w", tarPath, err)
 	}
 
-	// Deduplicate parent directory entries we add across calls to avoid
-	// emitting the same intermediate directory twice (some extractors warn).
-	addedDirs := make(map[string]struct{})
-
 	tw := tar.NewWriter(f)
 	for _, e := range entries {
-		if e.Src == "" || e.Dst == "" {
+		if e.Dst == "" {
 			_ = tw.Close()
-			return fmt.Errorf("inject copies: both 'src' and 'dst' are required")
+			return fmt.Errorf("inject copies: 'dst' is required")
+		}
+		if (e.Src == "") == (e.Data == nil) {
+			_ = tw.Close()
+			return fmt.Errorf("inject copies: exactly one of 'src' or inline data is required for %q", e.Dst)
 		}
 		if err := injectOne(tw, e, addedDirs); err != nil {
 			_ = tw.Close()
@@ -88,19 +113,12 @@ func InjectCopies(tarPath string, entries []CopyEntry) error {
 // injectOne appends a single CopyEntry (a file, directory, or symlink) to
 // the tar writer, along with any missing parent directory entries.
 func injectOne(tw *tar.Writer, e CopyEntry, addedDirs map[string]struct{}) error {
-	// Use Lstat so a top-level symlink is preserved as a symlink rather
-	// than silently dereferenced into its target's contents.
-	info, err := os.Lstat(e.Src)
-	if err != nil {
-		return fmt.Errorf("stat %q: %w", e.Src, err)
-	}
-
 	var modeOverride int64
 	var hasMode bool
 	if e.Mode != "" {
 		v, perr := parseOctalMode(e.Mode)
 		if perr != nil {
-			return fmt.Errorf("invalid mode %q for %q: %w", e.Mode, e.Src, perr)
+			return fmt.Errorf("invalid mode %q for %q: %w", e.Mode, displaySource(e), perr)
 		}
 		modeOverride = int64(v)
 		hasMode = true
@@ -113,6 +131,23 @@ func injectOne(tw *tar.Writer, e CopyEntry, addedDirs map[string]struct{}) error
 
 	if err := writeParentDirs(tw, dst, addedDirs); err != nil {
 		return err
+	}
+
+	// Inline data path: write a single regular file at dst with the
+	// provided bytes. Defaults to 0644 when no mode was supplied.
+	if e.Data != nil {
+		mode := int64(0o644)
+		if hasMode {
+			mode = modeOverride
+		}
+		return writeInlineFile(tw, dst, e.Data, mode)
+	}
+
+	// Use Lstat so a top-level symlink is preserved as a symlink rather
+	// than silently dereferenced into its target's contents.
+	info, err := os.Lstat(e.Src)
+	if err != nil {
+		return fmt.Errorf("stat %q: %w", e.Src, err)
 	}
 
 	switch {
@@ -138,6 +173,37 @@ func injectOne(tw *tar.Writer, e CopyEntry, addedDirs map[string]struct{}) error
 	default:
 		return writeRegularFile(tw, e.Src, dst, info, hasMode, modeOverride)
 	}
+}
+
+// writeInlineFile writes a single regular-file entry at tarName whose body
+// is the supplied byte slice. The tar header's ModTime is set to the Unix
+// epoch so that identical inline content produces an identical tar entry on
+// every run (inline data has no natural source timestamp).
+func writeInlineFile(tw *tar.Writer, tarName string, data []byte, mode int64) error {
+	hdr := &tar.Header{
+		Name:    tarName,
+		Mode:    mode,
+		Size:    int64(len(data)),
+		ModTime: time.Unix(0, 0),
+		Format:  tar.FormatPAX,
+	}
+	if err := tw.WriteHeader(hdr); err != nil {
+		return err
+	}
+	if _, err := tw.Write(data); err != nil {
+		return err
+	}
+	return nil
+}
+
+// displaySource returns a short identifier for an entry used in error
+// messages — either the host source path or "<inline data>" if the entry
+// supplies inline bytes via Data.
+func displaySource(e CopyEntry) string {
+	if e.Src != "" {
+		return e.Src
+	}
+	return "<inline data>"
 }
 
 // writeParentDirs emits tar entries for every missing parent directory of
@@ -276,6 +342,54 @@ func writeDirTree(tw *tar.Writer, src, dstBase string, hasMode bool, modeOverrid
 			return nil
 		}
 	})
+}
+
+// scanExistingDirs reads through a tar archive and returns the set of
+// directory entry names (normalised via normalizeTarName, matching the
+// form produced by toTarPath) that the archive already contains. It is
+// used by InjectCopies to suppress duplicate parent-dir headers that
+// would otherwise overwrite ownership/mode set by earlier passes
+// (notably ApplyUsers writing /home/<name> as <uid>:<gid> 0700).
+//
+// The function leaves the file offset at the start on return so the
+// caller can continue with truncateTarTrailer + append. If the tar is
+// malformed or only partially readable the caller is handed an empty
+// map, so InjectCopies falls back to the original behaviour of emitting
+// fresh dir headers rather than acting on a partial view of the tar.
+func scanExistingDirs(f *os.File) (map[string]struct{}, error) {
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return nil, err
+	}
+	dirs := make(map[string]struct{})
+	tr := tar.NewReader(f)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			// Malformed tail — discard partial results and fall back to
+			// the original behaviour (re-emit fresh dir headers).
+			dirs = make(map[string]struct{})
+			break
+		}
+		if hdr.Typeflag != tar.TypeDir {
+			continue
+		}
+		name := normalizeTarName(hdr.Name)
+		// Defensively ignore entries that canonicalise to nothing or
+		// escape the tar root (e.g. "a/../../b"): treating those as
+		// "already present" could suppress legitimate parent-dir
+		// headers further down.
+		if name == "" || name == ".." || strings.HasPrefix(name, "../") {
+			continue
+		}
+		dirs[name] = struct{}{}
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return nil, err
+	}
+	return dirs, nil
 }
 
 // truncateTarTrailer removes the two trailing 512-byte zero blocks written

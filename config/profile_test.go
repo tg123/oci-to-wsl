@@ -77,12 +77,12 @@ func TestLoadProfile_InvalidYAML(t *testing.T) {
 	}
 }
 
-func TestLoadProfile_CopiesResolveRelativeSrc(t *testing.T) {
+func TestLoadProfile_FilesResolveRelativeSrc(t *testing.T) {
 	dir := t.TempDir()
 	yaml := `
 name: copy-distro
 image: alpine:latest
-copies:
+files:
   - src: ./scripts/bootstrap.sh
     dst: /usr/local/bin/bootstrap.sh
     mode: "0755"
@@ -100,36 +100,36 @@ copies:
 	if err != nil {
 		t.Fatalf("LoadProfile: %v", err)
 	}
-	if len(p.Copies) != 3 {
-		t.Fatalf("Copies length: got %d, want 3", len(p.Copies))
+	if len(p.Files) != 3 {
+		t.Fatalf("Files length: got %d, want 3", len(p.Files))
 	}
 
 	wantRel0 := filepath.Join(dir, "scripts", "bootstrap.sh")
-	if p.Copies[0].Src != wantRel0 {
-		t.Errorf("Copies[0].Src: got %q, want %q", p.Copies[0].Src, wantRel0)
+	if p.Files[0].Src != wantRel0 {
+		t.Errorf("Files[0].Src: got %q, want %q", p.Files[0].Src, wantRel0)
 	}
-	if p.Copies[0].Dst != "/usr/local/bin/bootstrap.sh" {
-		t.Errorf("Copies[0].Dst: got %q", p.Copies[0].Dst)
+	if p.Files[0].Dst != "/usr/local/bin/bootstrap.sh" {
+		t.Errorf("Files[0].Dst: got %q", p.Files[0].Dst)
 	}
-	if p.Copies[0].Mode != "0755" {
-		t.Errorf("Copies[0].Mode: got %q", p.Copies[0].Mode)
+	if p.Files[0].Mode != "0755" {
+		t.Errorf("Files[0].Mode: got %q", p.Files[0].Mode)
 	}
 
 	// Absolute paths must be left untouched.
-	if p.Copies[1].Src != "/absolute/path/file" {
-		t.Errorf("Copies[1].Src: got %q, want unchanged absolute path", p.Copies[1].Src)
+	if p.Files[1].Src != "/absolute/path/file" {
+		t.Errorf("Files[1].Src: got %q, want unchanged absolute path", p.Files[1].Src)
 	}
 
 	wantRel2 := filepath.Join(dir, "assets")
-	if p.Copies[2].Src != wantRel2 {
-		t.Errorf("Copies[2].Src: got %q, want %q", p.Copies[2].Src, wantRel2)
+	if p.Files[2].Src != wantRel2 {
+		t.Errorf("Files[2].Src: got %q, want %q", p.Files[2].Src, wantRel2)
 	}
-	if p.Copies[2].Mode != "777" {
-		t.Errorf("Copies[2].Mode: got %q", p.Copies[2].Mode)
+	if p.Files[2].Mode != "777" {
+		t.Errorf("Files[2].Mode: got %q", p.Files[2].Mode)
 	}
 }
 
-func TestLoadProfile_CopiesExpandWindowsEnv(t *testing.T) {
+func TestLoadProfile_FilesExpandWindowsEnv(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("OCI_TO_WSL_TEST_ROOT", dir)
 	t.Setenv("OCI_TO_WSL_TEST_NAME", "thing")
@@ -137,7 +137,7 @@ func TestLoadProfile_CopiesExpandWindowsEnv(t *testing.T) {
 	yaml := `
 name: env-distro
 image: alpine:latest
-copies:
+files:
   - src: '%OCI_TO_WSL_TEST_ROOT%/sub/%OCI_TO_WSL_TEST_NAME%.txt'
     dst: /tmp/win.txt
   - src: '$OCI_TO_WSL_TEST_ROOT/posix/${OCI_TO_WSL_TEST_NAME}.txt'
@@ -155,18 +155,18 @@ copies:
 	}
 
 	want0 := filepath.Join(dir, "sub", "thing.txt")
-	if p.Copies[0].Src != want0 {
-		t.Errorf("Copies[0].Src: got %q, want %q", p.Copies[0].Src, want0)
+	if p.Files[0].Src != want0 {
+		t.Errorf("Files[0].Src: got %q, want %q", p.Files[0].Src, want0)
 	}
 	want1 := filepath.Join(dir, "posix", "thing.txt")
-	if p.Copies[1].Src != want1 {
-		t.Errorf("Copies[1].Src: got %q, want %q", p.Copies[1].Src, want1)
+	if p.Files[1].Src != want1 {
+		t.Errorf("Files[1].Src: got %q, want %q", p.Files[1].Src, want1)
 	}
 	// Unknown %VAR% must be preserved (not silently expanded to empty),
 	// then resolved relative to the profile dir.
 	want2 := filepath.Join(dir, "%OCI_TO_WSL_TEST_UNSET_VAR%", "literal")
-	if p.Copies[2].Src != want2 {
-		t.Errorf("Copies[2].Src: got %q, want %q", p.Copies[2].Src, want2)
+	if p.Files[2].Src != want2 {
+		t.Errorf("Files[2].Src: got %q, want %q", p.Files[2].Src, want2)
 	}
 }
 
@@ -184,9 +184,197 @@ func TestExpandHostPath_TildeAndUnknownVars(t *testing.T) {
 		t.Errorf("~/sub/file.txt: got %q, want %q", got, want)
 	}
 
-	// Unknown $VAR and ${VAR} are preserved.
-	if got := config.ExpandHostPath("/a/$OCI_TO_WSL_DEFINITELY_UNSET/b"); got != "/a/${OCI_TO_WSL_DEFINITELY_UNSET}/b" {
+	// Unknown $VAR and ${VAR} are preserved in their original form.
+	if got := config.ExpandHostPath("/a/$OCI_TO_WSL_DEFINITELY_UNSET/b"); got != "/a/$OCI_TO_WSL_DEFINITELY_UNSET/b" {
 		t.Errorf("unknown $VAR not preserved: got %q", got)
+	}
+	if got := config.ExpandHostPath("/a/${OCI_TO_WSL_DEFINITELY_UNSET}/b"); got != "/a/${OCI_TO_WSL_DEFINITELY_UNSET}/b" {
+		t.Errorf("unknown ${VAR} not preserved: got %q", got)
+	}
+}
+
+func TestLoadProfile_ExpandsUserEnvVars(t *testing.T) {
+	t.Setenv("OCI_TO_WSL_TEST_USER", "alice")
+	t.Setenv("OCI_TO_WSL_TEST_SHELL", "/bin/zsh")
+	yaml := `
+name: test
+image: ubuntu:22.04
+users:
+  - name: "%OCI_TO_WSL_TEST_USER%"
+    home: "/home/$OCI_TO_WSL_TEST_USER"
+    shell: "${OCI_TO_WSL_TEST_SHELL}"
+    gecos: "Hello %OCI_TO_WSL_TEST_USER%"
+    groups: ["%OCI_TO_WSL_TEST_USER%-admins"]
+    password_plain: "pw-%OCI_TO_WSL_TEST_USER%"
+    password_hash: "$6$abc$def"
+`
+	p := writeAndLoad(t, yaml)
+	if len(p.Users) != 1 {
+		t.Fatalf("expected 1 user, got %d", len(p.Users))
+	}
+	u := p.Users[0]
+	if u.Name != "alice" {
+		t.Errorf("Name: got %q, want alice", u.Name)
+	}
+	if u.Home != "/home/alice" {
+		t.Errorf("Home: got %q, want /home/alice", u.Home)
+	}
+	if u.Shell != "/bin/zsh" {
+		t.Errorf("Shell: got %q, want /bin/zsh", u.Shell)
+	}
+	if u.Gecos != "Hello alice" {
+		t.Errorf("Gecos: got %q", u.Gecos)
+	}
+	if len(u.Groups) != 1 || u.Groups[0] != "alice-admins" {
+		t.Errorf("Groups: got %v", u.Groups)
+	}
+	if u.PasswordPlain != "pw-alice" {
+		t.Errorf("PasswordPlain: got %q", u.PasswordPlain)
+	}
+	// PasswordHash must be left untouched even though it contains '$' sigils.
+	if u.PasswordHash != "$6$abc$def" {
+		t.Errorf("PasswordHash should not be expanded: got %q", u.PasswordHash)
+	}
+}
+
+func TestLoadProfile_FilesReplaceDefaultAndExplicit(t *testing.T) {
+	yaml := `
+name: replace-distro
+image: alpine:latest
+files:
+  - src: /a
+    dst: /etc/a
+  - src: /b
+    dst: /etc/b
+    replace: true
+  - src: /c
+    dst: /etc/c
+    replace: false
+`
+	p := writeAndLoad(t, yaml)
+	if len(p.Files) != 3 {
+		t.Fatalf("Files length: got %d, want 3", len(p.Files))
+	}
+	if p.Files[0].Replace != nil {
+		t.Errorf("Files[0].Replace (omitted): got non-nil pointer, want nil")
+	}
+	if !p.Files[0].ReplaceEnabled() {
+		t.Errorf("Files[0].ReplaceEnabled (omitted): got false, want true (default)")
+	}
+	if !p.Files[1].ReplaceEnabled() {
+		t.Errorf("Files[1].ReplaceEnabled (explicit true): got false, want true")
+	}
+	if p.Files[2].ReplaceEnabled() {
+		t.Errorf("Files[2].ReplaceEnabled (explicit false): got true, want false")
+	}
+}
+
+func TestLoadProfile_FilesContentAndContentBase64(t *testing.T) {
+	yaml := `
+name: content-distro
+image: alpine:latest
+files:
+  - dst: /etc/motd
+    content: "hello-inline\n"
+  - dst: /opt/bin
+    content_base64: aGVsbG8K
+    mode: "0600"
+`
+	p := writeAndLoad(t, yaml)
+	if len(p.Files) != 2 {
+		t.Fatalf("Files length: got %d, want 2", len(p.Files))
+	}
+	if p.Files[0].Content == nil || *p.Files[0].Content != "hello-inline\n" {
+		t.Errorf("Files[0].Content: got %v", p.Files[0].Content)
+	}
+	if p.Files[0].Src != "" {
+		t.Errorf("Files[0].Src: expected empty, got %q", p.Files[0].Src)
+	}
+	if p.Files[1].ContentBase64 == nil || *p.Files[1].ContentBase64 != "aGVsbG8K" {
+		t.Errorf("Files[1].ContentBase64: got %v", p.Files[1].ContentBase64)
+	}
+	if p.Files[1].Mode != "0600" {
+		t.Errorf("Files[1].Mode: got %q", p.Files[1].Mode)
+	}
+}
+
+func TestProfile_Validate(t *testing.T) {
+	empty := ""
+	s := func(v string) *string { return &v }
+	cases := []struct {
+		name    string
+		profile config.Profile
+		wantErr string // substring; empty means expect nil
+	}{
+		{
+			name:    "missing image",
+			profile: config.Profile{Name: "n"},
+			wantErr: "'image' is required",
+		},
+		{
+			name: "src only ok",
+			profile: config.Profile{Image: "alpine", Files: []config.FileEntry{
+				{Src: "/host/x", Dst: "/x"},
+			}},
+		},
+		{
+			name: "content only ok (empty allowed)",
+			profile: config.Profile{Image: "alpine", Files: []config.FileEntry{
+				{Content: &empty, Dst: "/x"},
+			}},
+		},
+		{
+			name: "src and content both set",
+			profile: config.Profile{Image: "alpine", Files: []config.FileEntry{
+				{Src: "/host/x", Content: s("hi"), Dst: "/x"},
+			}},
+			wantErr: "mutually exclusive",
+		},
+		{
+			name: "src and content_base64 both set",
+			profile: config.Profile{Image: "alpine", Files: []config.FileEntry{
+				{Src: "/host/x", ContentBase64: s("aGk="), Dst: "/x"},
+			}},
+			wantErr: "mutually exclusive",
+		},
+		{
+			name: "no source",
+			profile: config.Profile{Image: "alpine", Files: []config.FileEntry{
+				{Dst: "/x"},
+			}},
+			wantErr: "exactly one of",
+		},
+		{
+			name: "missing dst",
+			profile: config.Profile{Image: "alpine", Files: []config.FileEntry{
+				{Src: "/host/x"},
+			}},
+			wantErr: "'dst' is required",
+		},
+		{
+			name: "invalid base64",
+			profile: config.Profile{Image: "alpine", Files: []config.FileEntry{
+				{ContentBase64: s("not!!base64"), Dst: "/x"},
+			}},
+			wantErr: "decoding content_base64",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.profile.Validate()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error %q does not contain %q", err.Error(), tc.wantErr)
+			}
+		})
 	}
 }
 
@@ -256,8 +444,8 @@ init_cmds:
 	if got := p.InitCmds[1].Env[1]; got.Name != "HOME_OVERRIDE" || got.Value != "alice-home" {
 		t.Errorf("InitCmds[1].Env[1]: got %+v, want {HOME_OVERRIDE alice-home}", got)
 	}
-	// Unknown $VAR is preserved verbatim as ${NAME}.
-	if got := p.InitCmds[1].Env[2]; got.Name != "KEEP_LITERAL" || got.Value != "${OCI_TO_WSL_DEFINITELY_UNSET}" {
+	// Unknown $VAR is preserved verbatim (e.g. "$FOO" stays "$FOO").
+	if got := p.InitCmds[1].Env[2]; got.Name != "KEEP_LITERAL" || got.Value != "$OCI_TO_WSL_DEFINITELY_UNSET" {
 		t.Errorf("InitCmds[1].Env[2]: got %+v, want unknown preserved", got)
 	}
 }
@@ -319,8 +507,8 @@ func TestLoadProfile_WslConfPreservesUnknownVars(t *testing.T) {
 	}
 	yaml := "name: n\nimage: i\nwsl_conf:\n  content: |\n    [user]\n    default=$OCI_TO_WSL_TEST_MISSING\n"
 	p := writeAndLoad(t, yaml)
-	if p.WslConf == nil || !strings.Contains(p.WslConf.Content, "${OCI_TO_WSL_TEST_MISSING}") {
-		t.Fatalf("missing var should be preserved as ${...}, got %q", p.WslConf.Content)
+	if p.WslConf == nil || !strings.Contains(p.WslConf.Content, "$OCI_TO_WSL_TEST_MISSING") {
+		t.Fatalf("missing var should be preserved verbatim, got %q", p.WslConf.Content)
 	}
 }
 
