@@ -255,6 +255,94 @@ func TestInjectCopies_InlineData(t *testing.T) {
 	}
 }
 
+func TestInjectCopies_PreservesExistingDirOwnership(t *testing.T) {
+	// Regression: when the source tar already contains an explicit
+	// directory entry (e.g. /home/bob/ written by ApplyUsers with the
+	// new user's uid/gid and mode 0700), InjectCopies must NOT emit a
+	// fresh root:root 0755 header for the same path while writing
+	// parent directories of a staged file. Re-emission would cause
+	// wsl --import to apply the later (root-owned) header and leave the
+	// user unable to write to their own home — the original bug.
+	dir := t.TempDir()
+	tarPath := filepath.Join(dir, "rootfs.tar")
+
+	f, err := os.Create(tarPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tw := tar.NewWriter(f)
+	for _, d := range []struct {
+		name     string
+		mode     int64
+		uid, gid int
+	}{
+		{"home/", 0755, 0, 0},
+		{"home/bob/", 0700, 1000, 1000},
+	} {
+		if err := tw.WriteHeader(&tar.Header{
+			Name:     d.name,
+			Mode:     d.mode,
+			Uid:      d.uid,
+			Gid:      d.gid,
+			Typeflag: tar.TypeDir,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := wsl.InjectCopies(tarPath, []wsl.CopyEntry{
+		{Data: []byte("token"), Dst: "/home/bob/.azure/config"},
+	}); err != nil {
+		t.Fatalf("InjectCopies: %v", err)
+	}
+
+	// Walk the tar sequentially: the existing dir entries must appear
+	// exactly once; the only newly-emitted directory should be the
+	// previously-absent .azure subdirectory.
+	fr, err := os.Open(tarPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = fr.Close() }()
+	tr := tar.NewReader(fr)
+	dirCounts := map[string]int{}
+	dirHeaders := map[string]tar.Header{}
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("tar reader: %v", err)
+		}
+		if hdr.Typeflag == tar.TypeDir {
+			dirCounts[hdr.Name]++
+			dirHeaders[hdr.Name] = *hdr
+		}
+	}
+
+	for _, name := range []string{"home/", "home/bob/"} {
+		if got := dirCounts[name]; got != 1 {
+			t.Errorf("dir %q: got %d entries, want 1 (duplicate header would clobber ownership)", name, got)
+		}
+	}
+	if h := dirHeaders["home/bob/"]; h.Uid != 1000 || h.Gid != 1000 || h.Mode != 0700 {
+		t.Errorf("home/bob/ ownership clobbered: got uid=%d gid=%d mode=%o, want uid=1000 gid=1000 mode=0700",
+			h.Uid, h.Gid, h.Mode)
+	}
+
+	// The freshly-added subdirectory is expected to be present.
+	if dirCounts["home/bob/.azure/"] != 1 {
+		t.Errorf("expected exactly one home/bob/.azure/ entry, got %d", dirCounts["home/bob/.azure/"])
+	}
+}
+
 func TestInjectCopies_RejectsBothSrcAndData(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "f")

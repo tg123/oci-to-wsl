@@ -69,6 +69,17 @@ func InjectCopies(tarPath string, entries []CopyEntry) error {
 	}
 	defer func() { _ = f.Close() }()
 
+	// Scan the existing tar for directory entries so we don't emit
+	// duplicate parent-dir headers below. Re-emitting a directory header
+	// that the source tar (or an earlier ApplyUsers pass) already wrote
+	// causes wsl.exe --import to apply the *later* header's mode/owner,
+	// which clobbers e.g. /home/<user> back to root:root 0755 whenever a
+	// file is staged underneath it.
+	addedDirs, err := scanExistingDirs(f)
+	if err != nil {
+		return fmt.Errorf("scan existing dirs in %q: %w", tarPath, err)
+	}
+
 	// Strip the trailing two 512-byte zero blocks written by tar.Writer.Close
 	// so the new entries are appended in-stream rather than after EOF.
 	if err := truncateTarTrailer(f); err != nil {
@@ -77,10 +88,6 @@ func InjectCopies(tarPath string, entries []CopyEntry) error {
 	if _, err := f.Seek(0, io.SeekEnd); err != nil {
 		return fmt.Errorf("seek end of %q: %w", tarPath, err)
 	}
-
-	// Deduplicate parent directory entries we add across calls to avoid
-	// emitting the same intermediate directory twice (some extractors warn).
-	addedDirs := make(map[string]struct{})
 
 	tw := tar.NewWriter(f)
 	for _, e := range entries {
@@ -335,6 +342,52 @@ func writeDirTree(tw *tar.Writer, src, dstBase string, hasMode bool, modeOverrid
 			return nil
 		}
 	})
+}
+
+// scanExistingDirs reads through a tar archive and returns the set of
+// directory entry names (normalised to the tar-relative, no-leading-slash,
+// no-trailing-slash form produced by toTarPath) that the archive already
+// contains. It is used by InjectCopies to suppress duplicate parent-dir
+// headers that would otherwise overwrite ownership/mode set by earlier
+// passes (notably ApplyUsers writing /home/<name> as <uid>:<gid> 0700).
+//
+// The function leaves the file offset at the start on return so the
+// caller can continue with truncateTarTrailer + append. Errors reading
+// individual entries are non-fatal: a malformed or partially-readable
+// trailer just means we fall back to the original behaviour (emitting
+// fresh dir headers).
+func scanExistingDirs(f *os.File) (map[string]struct{}, error) {
+	dirs := make(map[string]struct{})
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return nil, err
+	}
+	tr := tar.NewReader(f)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			// Stop scanning on a malformed entry but keep whatever we
+			// collected so far — a partial set is still better than
+			// silently re-emitting dirs we already saw.
+			break
+		}
+		if hdr.Typeflag == tar.TypeDir {
+			name := strings.TrimSuffix(filepath.ToSlash(hdr.Name), "/")
+			name = strings.TrimPrefix(name, "./")
+			name = strings.TrimPrefix(name, "/")
+			name = path.Clean(name)
+			if name == "" || name == "." {
+				continue
+			}
+			dirs[name] = struct{}{}
+		}
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return nil, err
+	}
+	return dirs, nil
 }
 
 // truncateTarTrailer removes the two trailing 512-byte zero blocks written
