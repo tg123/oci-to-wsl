@@ -93,9 +93,9 @@ inputs (verified by a unit test).
 
 ```yaml
 # ubuntu.yaml
-name: my-ubuntu
-image: ubuntu:22.04
-install_dir: C:\WSL\my-ubuntu   # optional – defaults to .\<name>
+name: '%USERNAME%-ubuntu'           # %VAR% / $VAR / ${VAR} expanded from host env
+image: ubuntu:22.04                 # also accepts %VAR% / $VAR / ${VAR} (e.g. '%ACR_REGISTRY%/ubuntu:22.04')
+install_dir: '%USERPROFILE%\WSL\my-ubuntu'   # optional – defaults to .\<name>; %VAR% / $VAR / ${VAR} and leading ~ expanded
 files:                           # optional – injected into the rootfs tar so files exist on first boot
   - src: ./scripts/bootstrap.sh  # relative paths resolve to the profile's directory
     dst: /usr/local/bin/bootstrap.sh

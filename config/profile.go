@@ -192,14 +192,24 @@ type User struct {
 
 // Profile describes a WSL instance to create from an OCI image.
 type Profile struct {
-	// Name is the WSL distribution name.
+	// Name is the WSL distribution name. Windows %VAR%, POSIX $VAR / ${VAR}
+	// environment variable references are expanded at profile-load time so
+	// a single profile can produce per-operator distro names like
+	// "%USERNAME%-ubuntu".
 	Name string `yaml:"name"`
 
 	// Image is the OCI image reference (e.g. "ubuntu:22.04" or "myacr.azurecr.io/myimage:latest").
+	// Windows %VAR%, POSIX $VAR / ${VAR} environment variable references
+	// are expanded at profile-load time so a single profile can target
+	// per-environment registries like "%ACR_REGISTRY%/myimg:latest".
 	Image string `yaml:"image"`
 
 	// InstallDir is the directory where the WSL vhd/ext4 disk will be stored.
 	// Defaults to ".\<name>" relative to the current working directory.
+	// Windows-native paths, %VAR% / $VAR / ${VAR} environment variable
+	// references, and a leading ~ are expanded by LoadProfile (same rules
+	// as Files.Src), so a profile can use e.g. "%USERPROFILE%\WSL\<name>"
+	// or "~/WSL/<name>".
 	InstallDir string `yaml:"install_dir"`
 
 	// Files is a list of file/directory entries staged into the new WSL
@@ -398,6 +408,15 @@ func LoadProfile(path string) (*Profile, error) {
 	if err := yaml.Unmarshal(data, &p); err != nil {
 		return nil, fmt.Errorf("parsing profile %q: %w", path, err)
 	}
+
+	// Expand %NAME% / $NAME in top-level profile fields that a profile
+	// is likely to want to template per-host. Name and Image are not
+	// host paths, so use ExpandEnvVars; InstallDir IS a host path, so
+	// use ExpandHostPath (same as Files.Src) to also support ~ and
+	// (on Windows) drive-letter paths.
+	p.Name = ExpandEnvVars(p.Name)
+	p.Image = ExpandEnvVars(p.Image)
+	p.InstallDir = ExpandHostPath(p.InstallDir)
 
 	// Resolve file sources: expand Windows %VAR% / POSIX $VAR environment
 	// references and a leading ~ for the user's home folder, then resolve

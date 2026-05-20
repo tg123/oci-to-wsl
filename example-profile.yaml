@@ -3,15 +3,24 @@
 # This file can be passed to oci-to-wsl with:
 #   oci-to-wsl --profile example-profile.yaml
 
-# WSL distribution name (must be unique on this machine).
+# WSL distribution name (must be unique on this machine). Windows %VAR%,
+# POSIX $VAR / ${VAR} environment variable references are expanded against
+# the host at load time, so a single profile can produce per-operator
+# distro names like "%USERNAME%-ubuntu".
 name: my-ubuntu
 
 # OCI image reference.  Any registry that requires authentication will be
 # handled automatically – Azure Container Registry images open the default
 # browser for an Azure AD interactive sign-in (no device-code copy/paste).
+# Windows %VAR%, POSIX $VAR / ${VAR} environment variable references are
+# expanded against the host at load time, so the same profile can target
+# per-environment registries (e.g. "%ACR_REGISTRY%/myimg:latest").
 image: ubuntu:22.04
 
 # Where to store the WSL virtual disk.  Defaults to .\<name> when omitted.
+# Windows-native paths, %VAR% / $VAR / ${VAR} environment variable
+# references, and a leading ~ are expanded (same rules as files.src), so
+# a profile can use e.g. "%USERPROFILE%\WSL\my-ubuntu" or "~/WSL/my-ubuntu".
 install_dir: C:\WSL\my-ubuntu
 
 # Optional: files or folders to stage into the new distribution by appending

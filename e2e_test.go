@@ -442,6 +442,52 @@ files:
 			},
 		},
 		{
+			// PR#17 follow-up: %VAR% / $VAR / ${VAR} must also be
+			// expanded in the top-level `name`, `image`, and
+			// `install_dir` fields, so a single profile can produce
+			// per-operator distro names ("%USERNAME%-ubuntu"),
+			// per-environment image refs ("$ACR_REGISTRY/img:tag"),
+			// and per-user install dirs ("%USERPROFILE%\WSL\..."). The
+			// chosen env values below resolve such that the imported
+			// distro name equals tc.distro and the install_dir is a
+			// subdirectory under workDir.
+			name:   "top_level_fields_expand_env_vars",
+			distro: "e2e-toplevel-alice",
+			setup: func(t *testing.T, workDir string) []string {
+				t.Setenv("E2E_TOPLEVEL_USER", "alice")
+				t.Setenv("E2E_TOPLEVEL_IMAGE", "alpine")
+				// Use the dir flag-style %VAR% in install_dir. Anchor
+				// it to an absolute path under workDir so we can also
+				// assert the directory actually got created on the
+				// host (proving install_dir expansion really ran).
+				installRoot := filepath.Join(workDir, "wsl-toplevel")
+				t.Setenv("E2E_TOPLEVEL_DIR", installRoot)
+
+				profile := `name: 'e2e-toplevel-%E2E_TOPLEVEL_USER%'
+image: '${E2E_TOPLEVEL_IMAGE}:latest'
+install_dir: '$E2E_TOPLEVEL_DIR/${E2E_TOPLEVEL_USER}'
+`
+				profilePath := filepath.Join(workDir, "profile.yaml")
+				mustWrite(t, profilePath, profile)
+				// No --name / --dir flags: rely purely on the profile
+				// so the test exercises LoadProfile's expansion pass
+				// rather than the CLI override path.
+				return []string{"--profile", profilePath}
+			},
+			verifies: []verify{
+				// The distro booted under the EXPANDED name (tc.distro
+				// is "e2e-toplevel-alice"); wslExec only succeeds if
+				// `wsl --import` used that name, which in turn proves
+				// `name:` was expanded at profile-load time.
+				{name: "boot", script: "/bin/true"},
+				// `image:` was expanded to alpine:latest — the proof
+				// is that we landed on an alpine rootfs.
+				{name: "alpine_release_present", script: "test -s /etc/alpine-release && echo ok", want: "ok"},
+				{name: "uname_linux", script: "uname -s", want: "Linux"},
+			},
+		},
+
+		{
 			name:   "profile_wsl_conf_ini_content",
 			distro: "e2e-wslconf",
 			setup: func(t *testing.T, workDir string) []string {
