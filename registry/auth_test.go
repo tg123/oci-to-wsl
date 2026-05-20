@@ -1,6 +1,8 @@
 package registry
 
 import (
+	"encoding/base64"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -49,9 +51,147 @@ func TestACRAuthenticatorAuthorization(t *testing.T) {
 	}
 }
 
-// TestNewAzureCredential ensures the credential chain builds without error.
-func TestNewAzureCredential(t *testing.T) {
-	if _, err := newAzureCredential(); err != nil {
-		t.Errorf("newAzureCredential: unexpected error: %v", err)
+// TestNewAzureCLICredentialOrNil ensures the helper never returns an error
+// (returns nil instead when the CLI is unavailable, so the caller can fall
+// through to the interactive browser flow without surfacing a hard failure).
+func TestNewAzureCLICredentialOrNil(t *testing.T) {
+	// Either the CLI is installed (non-nil) or it isn't (nil) — both are
+	// valid outcomes on a CI runner. We only assert that the function does
+	// not panic and does not return a half-constructed credential.
+	_ = newAzureCLICredentialOrNil()
+}
+
+// fakeJWT assembles a JWT-shaped string with the given JSON payload. The
+// header and signature segments are dummy values — jwtTenantID only reads
+// the payload, so the signature is irrelevant to the test.
+func fakeJWT(payloadJSON string) string {
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none","typ":"JWT"}`))
+	body := base64.RawURLEncoding.EncodeToString([]byte(payloadJSON))
+	return header + "." + body + ".sig"
+}
+
+func TestJWTTenantID(t *testing.T) {
+	cases := []struct {
+		name       string
+		token      string
+		want       string
+		wantErrSub string
+	}{
+		{
+			name:  "real_aad_shape",
+			token: fakeJWT(`{"aud":"https://management.azure.com/","tid":"8b9ebe14-d942-49e7-ace9-14496d0caff0","oid":"abc"}`),
+			want:  "8b9ebe14-d942-49e7-ace9-14496d0caff0",
+		},
+		{
+			name:  "extra_claims_ignored",
+			token: fakeJWT(`{"tid":"72f988bf-86f1-41af-91ab-2d7cd011db47","name":"Alice","email":"alice@example.com"}`),
+			want:  "72f988bf-86f1-41af-91ab-2d7cd011db47",
+		},
+		{
+			name:       "not_a_jwt",
+			token:      "not-a-jwt",
+			wantErrSub: "not a JWT",
+		},
+		{
+			name:       "garbage_payload",
+			token:      "abc.!!!not-base64!!!.sig",
+			wantErrSub: "decoding JWT payload",
+		},
+		{
+			name:       "no_tid_claim",
+			token:      fakeJWT(`{"aud":"foo","iss":"bar"}`),
+			wantErrSub: "no tid claim",
+		},
+		{
+			name:       "empty_tid_claim",
+			token:      fakeJWT(`{"tid":""}`),
+			wantErrSub: "no tid claim",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := jwtTenantID(tc.token)
+			if tc.wantErrSub != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil (tid=%q)", tc.wantErrSub, got)
+				}
+				if !strings.Contains(err.Error(), tc.wantErrSub) {
+					t.Errorf("error %q does not contain %q", err, tc.wantErrSub)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("tid: got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIsACRTokenRejection(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "nil",
+			err:  nil,
+			want: false,
+		},
+		{
+			name: "unwrapped_unrelated",
+			err:  errors.New("connection refused"),
+			want: false,
+		},
+		{
+			name: "exchange_401_response",
+			err:  &acrExchangeError{registry: "x.azurecr.io", credential: "azure-cli", cause: errors.New("--------------------------------------------------------------------------------\nRESPONSE 401: 401 Unauthorized\nERROR CODE UNAVAILABLE\n")},
+			want: true,
+		},
+		{
+			name: "exchange_unknown_tenantId",
+			err:  &acrExchangeError{registry: "x.azurecr.io", credential: "azure-cli", cause: errors.New(`token validation failed: the received access token has unknown tenantId "72f988bf-86f1-41af-91ab-2d7cd011db47"`)},
+			want: true,
+		},
+		{
+			name: "exchange_unauthorized_word",
+			err:  &acrExchangeError{registry: "x.azurecr.io", credential: "azure-cli", cause: errors.New(`{"errors":[{"code":"UNAUTHORIZED","message":"..."}]}`)},
+			want: true,
+		},
+		{
+			name: "exchange_network_failure_not_rejection",
+			err:  &acrExchangeError{registry: "x.azurecr.io", credential: "azure-cli", cause: errors.New("dial tcp: connection refused")},
+			want: false,
+		},
+		{
+			name: "non_exchange_401_not_classified",
+			err:  errors.New("RESPONSE 401: 401 from some other call"),
+			want: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := isACRTokenRejection(tc.err)
+			if got != tc.want {
+				t.Errorf("isACRTokenRejection(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestACRExchangeError_Unwrap(t *testing.T) {
+	root := errors.New("root cause")
+	wrapped := &acrExchangeError{registry: "x.azurecr.io", credential: "azure-cli", cause: root}
+	if !errors.Is(wrapped, root) {
+		t.Errorf("errors.Is: wrapped error does not unwrap to root cause")
+	}
+	if !strings.Contains(wrapped.Error(), "x.azurecr.io") {
+		t.Errorf("Error() should include registry, got %q", wrapped.Error())
+	}
+	if !strings.Contains(wrapped.Error(), "azure-cli") {
+		t.Errorf("Error() should include credential name, got %q", wrapped.Error())
 	}
 }
