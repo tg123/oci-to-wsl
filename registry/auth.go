@@ -68,16 +68,31 @@ func NewACRAuthenticator(registry string) (authn.Authenticator, error) {
 		if err == nil {
 			return auth, nil
 		}
-		if !isACRTokenRejection(err) {
-			// Not a tenant/auth mismatch — surface the original error
-			// (transport failure, registry not found, etc.) instead of
-			// pointlessly opening a browser the user can't satisfy.
+		var ax *acrExchangeError
+		switch {
+		case errors.As(err, &ax) && isACRTokenRejection(err):
+			// ACR rejected the CLI's AAD token (most likely a tenant
+			// mismatch). Fall through to interactive browser sign-in so
+			// the operator can pick the correct tenant.
+			slog.Info("az CLI token rejected by ACR (likely tenant mismatch), switching to interactive browser sign-in",
+				"registry", registry,
+				"hint", "sign in with an account that has access to the registry's AAD tenant",
+			)
+		case errors.As(err, &ax):
+			// Exchange call reached ACR but failed for a non-auth reason
+			// (transport failure, registry not found, etc.). Opening a
+			// browser won't help — surface the original error.
 			return nil, err
+		default:
+			// AAD token acquisition itself failed (CLI not installed,
+			// user not logged in, no active subscription, etc.). Treat
+			// as a soft failure and fall through to the interactive
+			// browser flow so the operator can complete sign-in.
+			slog.Info("az CLI could not acquire an AAD token, switching to interactive browser sign-in",
+				"registry", registry,
+				"error", err,
+			)
 		}
-		slog.Info("az CLI token rejected by ACR (likely tenant mismatch), switching to interactive browser sign-in",
-			"registry", registry,
-			"hint", "sign in with an account that has access to the registry's AAD tenant",
-		)
 	}
 
 	browser, err := azidentity.NewInteractiveBrowserCredential(nil)
@@ -188,9 +203,10 @@ func (e *acrExchangeError) Unwrap() error { return e.cause }
 
 // isACRTokenRejection reports whether err looks like ACR rejected the AAD
 // token (HTTP 401), as opposed to a network failure, DNS error, or other
-// transport-level problem. We match on both the structured wrapper and the
-// raw stringified azcore.ResponseError because the SDK sometimes wraps the
-// response error through other layers before it surfaces here.
+// transport-level problem. Detection works only on errors wrapped in
+// *acrExchangeError (i.e. failures from the AAD-to-ACR-refresh-token
+// exchange step); raw azcore.ResponseError values bubbled up from elsewhere
+// are intentionally not classified here.
 func isACRTokenRejection(err error) bool {
 	if err == nil {
 		return false
@@ -216,13 +232,15 @@ func isACRTokenRejection(err error) bool {
 // forged token would only be able to mislead a log line.
 func jwtTenantID(jwt string) (string, error) {
 	parts := strings.Split(jwt, ".")
-	if len(parts) < 2 {
+	if len(parts) != 3 {
 		return "", fmt.Errorf("not a JWT: expected 3 segments, got %d", len(parts))
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		// Some JWTs use standard base64 with padding; try that as a fallback.
-		payload, err = base64.StdEncoding.DecodeString(parts[1])
+		// Some JWTs use padded base64url; try that as a fallback so we
+		// stay on the URL-safe alphabet (which standard base64 rejects
+		// for the '-' and '_' characters used by base64url).
+		payload, err = base64.URLEncoding.DecodeString(parts[1])
 		if err != nil {
 			return "", fmt.Errorf("decoding JWT payload: %w", err)
 		}
