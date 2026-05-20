@@ -319,7 +319,7 @@ install_dir: '/srv/wsl/$OCI_TO_WSL_TEST_USER/ubuntu'
 // whose name/image/install_dir happened to contain a literal "$" or "%"
 // that doesn't match a host env var keeps working unchanged.
 func TestLoadProfile_TopLevelPreservesUnknownVars(t *testing.T) {
-	os.Unsetenv("OCI_TO_WSL_TEST_DEFINITELY_UNSET")
+	_ = os.Unsetenv("OCI_TO_WSL_TEST_DEFINITELY_UNSET")
 	yaml := `
 name: '$OCI_TO_WSL_TEST_DEFINITELY_UNSET-distro'
 image: 'ubuntu:22.04'
