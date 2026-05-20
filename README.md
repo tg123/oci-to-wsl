@@ -114,7 +114,7 @@ files:                           # optional – injected into the rootfs tar so 
 deletes:                         # optional – absolute POSIX paths dropped from the rootfs tar before import
   - /var/cache/apt               # directories are removed recursively; applied before `files`
   - /etc/motd
-  - '/home/%USERNAME%/.cache'    # %VAR% / $VAR / ${VAR} expanded the same as `files.dst`
+  - '/home/%USERNAME%/.cache'    # %VAR% / $VAR / ${VAR} are expanded the same as `files.dst`
 users:                           # optional – Linux users created by editing /etc/passwd, /etc/shadow, /etc/group
   - name: "%USERNAME%"           # required; %VAR% / $VAR / ${VAR} expanded from host env (e.g. mirror Windows login into WSL)
     uid: 1000                    # optional; auto-allocated from 1000+ when omitted

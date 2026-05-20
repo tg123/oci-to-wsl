@@ -405,6 +405,7 @@ func LoadProfile(path string) (*Profile, error) {
 	// profiles remain portable regardless of the caller's CWD.
 	baseDir := filepath.Dir(path)
 	for i := range p.Files {
+		p.Files[i].Dst = ExpandEnvVars(p.Files[i].Dst)
 		src := p.Files[i].Src
 		if src == "" {
 			continue
@@ -423,7 +424,6 @@ func LoadProfile(path string) (*Profile, error) {
 			src = filepath.Join(baseDir, src)
 		}
 		p.Files[i].Src = src
-		p.Files[i].Dst = ExpandEnvVars(p.Files[i].Dst)
 	}
 
 	// Expand %NAME% / $NAME in `deletes` so a single profile can target

@@ -253,20 +253,25 @@ files:
     dst: "/home/%OCI_TO_WSL_TEST_USER%/.azure"
   - src: ` + srcDir + `
     dst: "/home/${OCI_TO_WSL_TEST_USER}/code"
+  - content: "hello"
+    dst: "/home/$OCI_TO_WSL_TEST_USER/notes"
 deletes:
   - "/home/$OCI_TO_WSL_TEST_USER/.cache"
   - "/etc/skel/%OCI_TO_WSL_TEST_USER%.conf"
 `
 	p := writeAndLoad(t, yaml)
 
-	if len(p.Files) != 2 {
-		t.Fatalf("expected 2 files, got %d", len(p.Files))
+	if len(p.Files) != 3 {
+		t.Fatalf("expected 3 files, got %d", len(p.Files))
 	}
 	if p.Files[0].Dst != "/home/alice/.azure" {
 		t.Errorf("Files[0].Dst: got %q, want /home/alice/.azure", p.Files[0].Dst)
 	}
 	if p.Files[1].Dst != "/home/alice/code" {
 		t.Errorf("Files[1].Dst: got %q, want /home/alice/code", p.Files[1].Dst)
+	}
+	if p.Files[2].Dst != "/home/alice/notes" {
+		t.Errorf("Files[2].Dst (content entry): got %q, want /home/alice/notes", p.Files[2].Dst)
 	}
 
 	if len(p.Deletes) != 2 {
