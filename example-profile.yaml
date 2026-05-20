@@ -3,15 +3,24 @@
 # This file can be passed to oci-to-wsl with:
 #   oci-to-wsl --profile example-profile.yaml
 
-# WSL distribution name (must be unique on this machine).
+# WSL distribution name (must be unique on this machine). Windows %VAR%,
+# POSIX $VAR / ${VAR} environment variable references are expanded against
+# the host at load time, so a single profile can produce per-operator
+# distro names like "%USERNAME%-ubuntu".
 name: my-ubuntu
 
 # OCI image reference.  Any registry that requires authentication will be
 # handled automatically – Azure Container Registry images open the default
 # browser for an Azure AD interactive sign-in (no device-code copy/paste).
+# Windows %VAR%, POSIX $VAR / ${VAR} environment variable references are
+# expanded against the host at load time, so the same profile can target
+# per-environment registries (e.g. "%ACR_REGISTRY%/myimg:latest").
 image: ubuntu:22.04
 
 # Where to store the WSL virtual disk.  Defaults to .\<name> when omitted.
+# Windows-native paths, %VAR% / $VAR / ${VAR} environment variable
+# references, and a leading ~ are expanded (same rules as files.src), so
+# a profile can use e.g. "%USERPROFILE%\WSL\my-ubuntu" or "~/WSL/my-ubuntu".
 install_dir: C:\WSL\my-ubuntu
 
 # Optional: files or folders to stage into the new distribution by appending
@@ -27,13 +36,15 @@ install_dir: C:\WSL\my-ubuntu
 # profile. Windows %VAR% (e.g. %USERPROFILE%, %APPDATA%), POSIX $VAR /
 # ${VAR} and a leading ~ are expanded in 'src'. Native Windows paths like
 # C:\Users\me\file are accepted. 'dst' must be an absolute POSIX path
-# (start with '/'). 'mode' is optional and is baked into the tar header
-# (no chmod step runs inside the distribution); for a directory source it
-# applies recursively to all regular files; for inline content it defaults
-# to 0644. 'replace' is optional and defaults to true: any existing entry
-# at 'dst' in the upstream rootfs tar is dropped before the file is staged
-# (for a directory 'dst' the whole subtree is removed). Set 'replace:
-# false' to overlay onto the existing tree instead.
+# (start with '/') and supports the same %VAR% / $VAR / ${VAR} host-env
+# expansion as 'src' so a single profile can target per-host paths such as
+# /home/%USERNAME%/.config. 'mode' is optional and is baked into the tar
+# header (no chmod step runs inside the distribution); for a directory
+# source it applies recursively to all regular files; for inline content
+# it defaults to 0644. 'replace' is optional and defaults to true: any
+# existing entry at 'dst' in the upstream rootfs tar is dropped before the
+# file is staged (for a directory 'dst' the whole subtree is removed). Set
+# 'replace: false' to overlay onto the existing tree instead.
 files:
   - src: ./scripts/bootstrap.sh
     dst: /usr/local/bin/bootstrap.sh

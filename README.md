@@ -93,9 +93,9 @@ inputs (verified by a unit test).
 
 ```yaml
 # ubuntu.yaml
-name: my-ubuntu
-image: ubuntu:22.04
-install_dir: C:\WSL\my-ubuntu   # optional – defaults to .\<name>
+name: '%USERNAME%-ubuntu'           # %VAR% / $VAR / ${VAR} expanded from host env
+image: ubuntu:22.04                 # also accepts %VAR% / $VAR / ${VAR} (e.g. '%ACR_REGISTRY%/ubuntu:22.04')
+install_dir: '%USERPROFILE%\WSL\my-ubuntu'   # optional – defaults to .\<name>; %VAR% / $VAR / ${VAR} and leading ~ expanded
 files:                           # optional – injected into the rootfs tar so files exist on first boot
   - src: ./scripts/bootstrap.sh  # relative paths resolve to the profile's directory
     dst: /usr/local/bin/bootstrap.sh
@@ -103,8 +103,8 @@ files:                           # optional – injected into the rootfs tar so 
   - src: C:\Users\me\assets      # native Windows paths are accepted
     dst: /opt/assets
     replace: false               # optional – default true; false overlays onto the upstream tree instead of replacing it
-  - src: '%USERPROFILE%\.gitconfig'  # %VAR%, $VAR / ${VAR} and a leading ~ are expanded
-    dst: /root/.gitconfig
+  - src: '%USERPROFILE%\.gitconfig'  # %VAR%, $VAR / ${VAR} and a leading ~ are expanded in `src`
+    dst: '/home/%USERNAME%/.gitconfig' # `dst` accepts the same %VAR% / $VAR / ${VAR} expansion as `src`
   - dst: /etc/motd               # inline UTF-8 body in place of 'src'
     content: |
       Welcome to my-ubuntu
@@ -114,6 +114,7 @@ files:                           # optional – injected into the rootfs tar so 
 deletes:                         # optional – absolute POSIX paths dropped from the rootfs tar before import
   - /var/cache/apt               # directories are removed recursively; applied before `files`
   - /etc/motd
+  - '/home/%USERNAME%/.cache'    # %VAR% / $VAR / ${VAR} are expanded the same as `files.dst`
 users:                           # optional – Linux users created by editing /etc/passwd, /etc/shadow, /etc/group
   - name: "%USERNAME%"           # required; %VAR% / $VAR / ${VAR} expanded from host env (e.g. mirror Windows login into WSL)
     uid: 1000                    # optional; auto-allocated from 1000+ when omitted

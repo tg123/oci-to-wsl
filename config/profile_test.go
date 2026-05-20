@@ -237,6 +237,106 @@ users:
 	}
 }
 
+// Profiles often want a single template that targets per-host paths under
+// /home/$USERNAME via files: and deletes:. Both fields should expand
+// %NAME% / $NAME / ${NAME} the same way users.* does so the YAML stays
+// portable across operators whose Windows username differs from one
+// another.
+func TestLoadProfile_ExpandsFilesDstAndDeletesEnvVars(t *testing.T) {
+	t.Setenv("OCI_TO_WSL_TEST_USER", "alice")
+	srcDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(srcDir, "marker"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("seed src: %v", err)
+	}
+	yaml := `
+name: test
+image: ubuntu:22.04
+files:
+  - src: ` + srcDir + `
+    dst: "/home/%OCI_TO_WSL_TEST_USER%/.azure"
+  - src: ` + srcDir + `
+    dst: "/home/${OCI_TO_WSL_TEST_USER}/code"
+  - content: "hello"
+    dst: "/home/$OCI_TO_WSL_TEST_USER/notes"
+deletes:
+  - "/home/$OCI_TO_WSL_TEST_USER/.cache"
+  - "/etc/skel/%OCI_TO_WSL_TEST_USER%.conf"
+`
+	p := writeAndLoad(t, yaml)
+
+	if len(p.Files) != 3 {
+		t.Fatalf("expected 3 files, got %d", len(p.Files))
+	}
+	if p.Files[0].Dst != "/home/alice/.azure" {
+		t.Errorf("Files[0].Dst: got %q, want /home/alice/.azure", p.Files[0].Dst)
+	}
+	if p.Files[1].Dst != "/home/alice/code" {
+		t.Errorf("Files[1].Dst: got %q, want /home/alice/code", p.Files[1].Dst)
+	}
+	if p.Files[2].Dst != "/home/alice/notes" {
+		t.Errorf("Files[2].Dst (content entry): got %q, want /home/alice/notes", p.Files[2].Dst)
+	}
+
+	if len(p.Deletes) != 2 {
+		t.Fatalf("expected 2 deletes, got %d", len(p.Deletes))
+	}
+	if p.Deletes[0] != "/home/alice/.cache" {
+		t.Errorf("Deletes[0]: got %q, want /home/alice/.cache", p.Deletes[0])
+	}
+	if p.Deletes[1] != "/etc/skel/alice.conf" {
+		t.Errorf("Deletes[1]: got %q, want /etc/skel/alice.conf", p.Deletes[1])
+	}
+}
+
+// Profiles often want to template the top-level distro name, image
+// reference, and install_dir per-host (e.g. a single profile that
+// produces a "%USERNAME%-ubuntu" distribution under
+// "%USERPROFILE%\WSL\..." with an image pulled from "%ACR_REGISTRY%").
+// All three fields should expand %NAME% / $NAME / ${NAME} the same way
+// users.* / files.dst / deletes already do. InstallDir is a host path,
+// so it should additionally expand a leading ~ via ExpandHostPath.
+func TestLoadProfile_ExpandsTopLevelEnvVars(t *testing.T) {
+	t.Setenv("OCI_TO_WSL_TEST_USER", "alice")
+	t.Setenv("OCI_TO_WSL_TEST_REGISTRY", "myacr.example.com")
+	yaml := `
+name: '%OCI_TO_WSL_TEST_USER%-ubuntu'
+image: '${OCI_TO_WSL_TEST_REGISTRY}/ubuntu:22.04'
+install_dir: '/srv/wsl/$OCI_TO_WSL_TEST_USER/ubuntu'
+`
+	p := writeAndLoad(t, yaml)
+
+	if p.Name != "alice-ubuntu" {
+		t.Errorf("Name: got %q, want alice-ubuntu", p.Name)
+	}
+	if p.Image != "myacr.example.com/ubuntu:22.04" {
+		t.Errorf("Image: got %q, want myacr.example.com/ubuntu:22.04", p.Image)
+	}
+	if p.InstallDir != filepath.FromSlash("/srv/wsl/alice/ubuntu") &&
+		p.InstallDir != "/srv/wsl/alice/ubuntu" {
+		t.Errorf("InstallDir: got %q, want /srv/wsl/alice/ubuntu", p.InstallDir)
+	}
+}
+
+// Unknown variables in top-level fields must round-trip verbatim (same
+// guarantee ExpandEnvVars makes everywhere else), so an existing profile
+// whose name/image/install_dir happened to contain a literal "$" or "%"
+// that doesn't match a host env var keeps working unchanged.
+func TestLoadProfile_TopLevelPreservesUnknownVars(t *testing.T) {
+	_ = os.Unsetenv("OCI_TO_WSL_TEST_DEFINITELY_UNSET")
+	yaml := `
+name: '$OCI_TO_WSL_TEST_DEFINITELY_UNSET-distro'
+image: 'ubuntu:22.04'
+install_dir: '/srv/%OCI_TO_WSL_TEST_DEFINITELY_UNSET%/wsl'
+`
+	p := writeAndLoad(t, yaml)
+	if p.Name != "$OCI_TO_WSL_TEST_DEFINITELY_UNSET-distro" {
+		t.Errorf("Name: got %q, want literal preserved", p.Name)
+	}
+	if !strings.Contains(p.InstallDir, "%OCI_TO_WSL_TEST_DEFINITELY_UNSET%") {
+		t.Errorf("InstallDir: got %q, want %% token preserved", p.InstallDir)
+	}
+}
+
 func TestLoadProfile_FilesReplaceDefaultAndExplicit(t *testing.T) {
 	yaml := `
 name: replace-distro

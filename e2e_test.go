@@ -264,6 +264,93 @@ users:
 			},
 		},
 		{
+			// PR#17 regression: %VAR% / $VAR / ${VAR} in `files.dst` and
+			// `deletes` must be expanded against the host environment at
+			// profile-load time, mirroring the expansion already applied
+			// to `files.src`, `users.*`, and `wsl_conf.content`. Without
+			// expansion the literal "%E2E_EXPAND_USER%" lands in the tar
+			// as a directory name and `deletes` silently no-ops on a
+			// path that doesn't exist, both of which we assert against.
+			name:   "files_dst_and_deletes_expand_env_vars",
+			distro: "e2e-expand",
+			setup: func(t *testing.T, workDir string) []string {
+				t.Setenv("E2E_EXPAND_USER", "alice")
+				// Use an upstream-shipped file as the deletes target so
+				// we can prove the path was actually expanded: if the
+				// literal "/etc/%E2E_EXPAND_TARGET%" went through, the
+				// file at /etc/alpine-release would still exist.
+				t.Setenv("E2E_EXPAND_TARGET", "alpine-release")
+
+				mustMkdir(t, filepath.Join(workDir, "dotconfig"))
+				mustWrite(t, filepath.Join(workDir, "dotconfig", "marker"), "config-from-host")
+
+				profile := `name: e2e-expand
+image: alpine:latest
+users:
+  - name: '%E2E_EXPAND_USER%'
+    shell: /bin/sh
+files:
+  # %VAR%, $VAR, ${VAR} must all expand in dst — exercise each form.
+  - src: ./dotconfig
+    dst: '/home/%E2E_EXPAND_USER%/.config'
+  - src: ./dotconfig/marker
+    dst: '/home/$E2E_EXPAND_USER/posix-bare'
+  - src: ./dotconfig/marker
+    dst: '/home/${E2E_EXPAND_USER}/posix-braced'
+deletes:
+  - '/etc/%E2E_EXPAND_TARGET%'
+`
+				profilePath := filepath.Join(workDir, "profile.yaml")
+				mustWrite(t, profilePath, profile)
+
+				installDir := filepath.Join(workDir, "wsl-e2e-expand")
+				return []string{"--profile", profilePath, "--dir", installDir}
+			},
+			verifies: []verify{
+				// users: still creates the account (profile parsed OK
+				// after the new expansion pass).
+				{name: "alice_passwd", script: "getent passwd alice", wantSub: "alice:x:"},
+				// files.dst with %VAR% expanded — directory and content
+				// land under /home/alice, NOT under a literal
+				// /home/%E2E_EXPAND_USER%.
+				{name: "config_dir_present", script: "test -d /home/alice/.config && echo ok", want: "ok"},
+				{name: "config_content", script: "cat /home/alice/.config/marker", want: "config-from-host"},
+				// $VAR (bare) and ${VAR} (braced) forms expand the same
+				// way (mirroring ExpandHostPath / users.* behaviour).
+				{name: "posix_bare_content", script: "cat /home/alice/posix-bare", want: "config-from-host"},
+				{name: "posix_braced_content", script: "cat /home/alice/posix-braced", want: "config-from-host"},
+				// No literal "%E2E_EXPAND_USER%" directory leaked into
+				// the tar. The shell glob is quoted so the literal %...%
+				// has to match a real filename to expand.
+				{
+					name:   "no_literal_dst_token_in_home",
+					script: "if ls -d '/home/%E2E_EXPAND_USER%' >/dev/null 2>&1; then echo LEAKED; else echo OK; fi",
+					want:   "OK",
+				},
+				// deletes with %VAR% expanded — alpine's stock
+				// /etc/alpine-release must be GONE. Without expansion
+				// the literal "/etc/%E2E_EXPAND_TARGET%" would not
+				// match, the upstream file would remain, and this
+				// would fail.
+				{name: "deletes_expanded_removed_upstream", script: "test ! -e /etc/alpine-release && echo ok", want: "ok"},
+				{
+					name:   "no_literal_delete_token_path",
+					script: "if ls '/etc/%E2E_EXPAND_TARGET%' >/dev/null 2>&1; then echo LEAKED; else echo OK; fi",
+					want:   "OK",
+				},
+				// PR#16 ownership preservation must still hold when
+				// files.dst is templated: the parent /home/alice that
+				// users: created has to survive files: re-emitting its
+				// parent dirs, and alice must be able to write into it.
+				{name: "alice_home_owned", script: "stat -c '%U:%G:%a' /home/alice", want: "alice:alice:700"},
+				{
+					name:   "alice_can_write_home",
+					script: "su -s /bin/sh alice -c 'touch /home/alice/.ownership-probe && stat -c %U /home/alice/.ownership-probe'",
+					want:   "alice",
+				},
+			},
+		},
+		{
 			// Regression: when a profile both creates a user and stages
 			// files under that user's home, /home/<name> must remain
 			// owned by the new user. Earlier InjectCopies re-emitted the
@@ -388,6 +475,52 @@ files:
 				{name: "binary_mode", script: "stat -c '%a' /opt/binary.bin", want: "600"},
 			},
 		},
+		{
+			// PR#17 follow-up: %VAR% / $VAR / ${VAR} must also be
+			// expanded in the top-level `name`, `image`, and
+			// `install_dir` fields, so a single profile can produce
+			// per-operator distro names ("%USERNAME%-ubuntu"),
+			// per-environment image refs ("$ACR_REGISTRY/img:tag"),
+			// and per-user install dirs ("%USERPROFILE%\WSL\..."). The
+			// chosen env values below resolve such that the imported
+			// distro name equals tc.distro and the install_dir is a
+			// subdirectory under workDir.
+			name:   "top_level_fields_expand_env_vars",
+			distro: "e2e-toplevel-alice",
+			setup: func(t *testing.T, workDir string) []string {
+				t.Setenv("E2E_TOPLEVEL_USER", "alice")
+				t.Setenv("E2E_TOPLEVEL_IMAGE", "alpine")
+				// Use the dir flag-style %VAR% in install_dir. Anchor
+				// it to an absolute path under workDir so we can also
+				// assert the directory actually got created on the
+				// host (proving install_dir expansion really ran).
+				installRoot := filepath.Join(workDir, "wsl-toplevel")
+				t.Setenv("E2E_TOPLEVEL_DIR", installRoot)
+
+				profile := `name: 'e2e-toplevel-%E2E_TOPLEVEL_USER%'
+image: '${E2E_TOPLEVEL_IMAGE}:latest'
+install_dir: '$E2E_TOPLEVEL_DIR/${E2E_TOPLEVEL_USER}'
+`
+				profilePath := filepath.Join(workDir, "profile.yaml")
+				mustWrite(t, profilePath, profile)
+				// No --name / --dir flags: rely purely on the profile
+				// so the test exercises LoadProfile's expansion pass
+				// rather than the CLI override path.
+				return []string{"--profile", profilePath}
+			},
+			verifies: []verify{
+				// The distro booted under the EXPANDED name (tc.distro
+				// is "e2e-toplevel-alice"); wslExec only succeeds if
+				// `wsl --import` used that name, which in turn proves
+				// `name:` was expanded at profile-load time.
+				{name: "boot", script: "/bin/true"},
+				// `image:` was expanded to alpine:latest — the proof
+				// is that we landed on an alpine rootfs.
+				{name: "alpine_release_present", script: "test -s /etc/alpine-release && echo ok", want: "ok"},
+				{name: "uname_linux", script: "uname -s", want: "Linux"},
+			},
+		},
+
 		{
 			name:   "profile_wsl_conf_ini_content",
 			distro: "e2e-wslconf",

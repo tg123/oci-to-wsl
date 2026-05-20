@@ -54,6 +54,12 @@ type FileEntry struct {
 	// must be absolute (start with "/"). For a directory source, the
 	// directory itself is created at Dst and its contents are placed
 	// underneath. For a file source, Dst is the resulting file path.
+	// Windows %VAR%, POSIX $VAR / ${VAR} environment variable references
+	// are expanded at profile-load time so a single profile can target
+	// per-host paths like /home/%USERNAME%/.config. Unlike Src, a
+	// leading ~ is NOT expanded — Dst always lives inside the guest
+	// rootfs, so ~ would be ambiguous (the operator's host home, or the
+	// guest user's home?).
 	Dst string `yaml:"dst"`
 
 	// Mode is an optional file mode for the destination, expressed as an
@@ -186,14 +192,24 @@ type User struct {
 
 // Profile describes a WSL instance to create from an OCI image.
 type Profile struct {
-	// Name is the WSL distribution name.
+	// Name is the WSL distribution name. Windows %VAR%, POSIX $VAR / ${VAR}
+	// environment variable references are expanded at profile-load time so
+	// a single profile can produce per-operator distro names like
+	// "%USERNAME%-ubuntu".
 	Name string `yaml:"name"`
 
 	// Image is the OCI image reference (e.g. "ubuntu:22.04" or "myacr.azurecr.io/myimage:latest").
+	// Windows %VAR%, POSIX $VAR / ${VAR} environment variable references
+	// are expanded at profile-load time so a single profile can target
+	// per-environment registries like "%ACR_REGISTRY%/myimg:latest".
 	Image string `yaml:"image"`
 
 	// InstallDir is the directory where the WSL vhd/ext4 disk will be stored.
 	// Defaults to ".\<name>" relative to the current working directory.
+	// Windows-native paths, %VAR% / $VAR / ${VAR} environment variable
+	// references, and a leading ~ are expanded by LoadProfile (same rules
+	// as Files.Src), so a profile can use e.g. "%USERPROFILE%\WSL\<name>"
+	// or "~/WSL/<name>".
 	InstallDir string `yaml:"install_dir"`
 
 	// Files is a list of file/directory entries staged into the new WSL
@@ -208,7 +224,10 @@ type Profile struct {
 	// recursively (every entry under that prefix is dropped). Missing
 	// paths are silently ignored. Deletes are applied before Files, so
 	// a profile may delete an upstream directory and then stage its own
-	// replacement at the same destination.
+	// replacement at the same destination. Each entry is host-env
+	// expanded at profile-load time (same %VAR% / $VAR / ${VAR} rules
+	// as Files.Dst) so a single profile can target paths like
+	// /home/%USERNAME%/.cache across operators.
 	Deletes []string `yaml:"deletes"`
 
 	// Users is a list of Linux user accounts to create by editing
@@ -466,12 +485,22 @@ func LoadProfile(path string) (*Profile, error) {
 		return nil, fmt.Errorf("parsing profile %q: %w", path, err)
 	}
 
+	// Expand %NAME% / $NAME in top-level profile fields that a profile
+	// is likely to want to template per-host. Name and Image are not
+	// host paths, so use ExpandEnvVars; InstallDir IS a host path, so
+	// use ExpandHostPath (same as Files.Src) to also support ~ and
+	// (on Windows) drive-letter paths.
+	p.Name = ExpandEnvVars(p.Name)
+	p.Image = ExpandEnvVars(p.Image)
+	p.InstallDir = ExpandHostPath(p.InstallDir)
+
 	// Resolve file sources: expand Windows %VAR% / POSIX $VAR environment
 	// references and a leading ~ for the user's home folder, then resolve
 	// remaining relative paths against the profile file's directory so
 	// profiles remain portable regardless of the caller's CWD.
 	baseDir := filepath.Dir(path)
 	for i := range p.Files {
+		p.Files[i].Dst = ExpandEnvVars(p.Files[i].Dst)
 		src := p.Files[i].Src
 		if src == "" {
 			continue
@@ -501,6 +530,14 @@ func LoadProfile(path string) (*Profile, error) {
 		for j := range p.InitCmds[i].Env {
 			p.InitCmds[i].Env[j].Value = ExpandEnvVars(p.InitCmds[i].Env[j].Value)
 		}
+	}
+
+	// Expand %NAME% / $NAME in `deletes` so a single profile can target
+	// host-templated paths (e.g. /home/%USERNAME%/...). InitCmds.Cmd is
+	// deliberately NOT expanded because shell scripts there use $VAR and
+	// ${VAR} for runtime values that must survive YAML load unchanged.
+	for i := range p.Deletes {
+		p.Deletes[i] = ExpandEnvVars(p.Deletes[i])
 	}
 
 	// Expand environment variables in wsl_conf content so users can write
