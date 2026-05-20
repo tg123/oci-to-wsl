@@ -33,6 +33,21 @@ $env:OCI_TO_WSL_NO_LOCAL = '1'
 oci-to-wsl.exe --image ubuntu:22.04 --name my-ubuntu
 ```
 
+## Azure Container Registry authentication
+
+For `*.azurecr.io`/`.cn`/`.us` hosts `oci-to-wsl` automatically acquires an
+AAD token (reusing your `az login` session, then falling back to interactive
+browser sign-in). Set `OCI_TO_WSL_NO_ACR_AAD=1` (also accepts
+`true`/`True`/`TRUE`/`t`) to disable AAD entirely and use the normal docker
+keychain instead, so a username/password (or token) from `docker login` is
+honored just like for any other registry:
+
+```powershell
+$env:OCI_TO_WSL_NO_ACR_AAD = '1'
+docker login myacr.azurecr.io      # or set $env:DOCKER_CONFIG
+oci-to-wsl.exe --image myacr.azurecr.io/myimage:latest --name myimage
+```
+
 ## Cross-platform tars (save-tar mode)
 
 When importing into WSL the image platform is always the host's: importing an

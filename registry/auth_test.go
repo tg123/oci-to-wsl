@@ -35,6 +35,30 @@ func TestAADScope(t *testing.T) {
 	}
 }
 
+func TestIsACRAADDisabled(t *testing.T) {
+	cases := []struct {
+		val  string
+		want bool
+	}{
+		{"", false},
+		{"0", false},
+		{"false", false},
+		{"FALSE", false},
+		{"garbage", false},
+		{"1", true},
+		{"t", true},
+		{"true", true},
+		{"True", true},
+		{"TRUE", true},
+	}
+	for _, tc := range cases {
+		t.Setenv(envDisableACRAAD, tc.val)
+		if got := isACRAADDisabled(); got != tc.want {
+			t.Errorf("isACRAADDisabled() with %s=%q = %v, want %v", envDisableACRAAD, tc.val, got, tc.want)
+		}
+	}
+}
+
 // TestACRAuthenticatorAuthorization confirms the sentinel username/password
 // format expected by ACR.
 func TestACRAuthenticatorAuthorization(t *testing.T) {

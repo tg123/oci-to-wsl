@@ -254,9 +254,15 @@ func buildCraneOptions(ref name.Reference, platform *v1.Platform, opts PullOptio
 		return craneOpts
 	}
 
-	// Auto-detect ACR registries and use browser-based auth.
+	// Auto-detect ACR registries and use browser-based auth (unless the
+	// operator opted out via OCI_TO_WSL_NO_ACR_AAD, in which case we fall
+	// straight through to the docker keychain so a `docker login`-style
+	// username/password works for ACR too).
 	registry := ref.Context().RegistryStr()
-	if isACR(registry) {
+	switch {
+	case isACR(registry) && isACRAADDisabled():
+		slog.Info("ACR AAD auth disabled via env, using docker keychain", "registry", registry, "env", envDisableACRAAD)
+	case isACR(registry):
 		slog.Info("detected ACR registry, authenticating via Azure SDK", "registry", registry)
 		auth, err := NewACRAuthenticator(registry)
 		if err != nil {

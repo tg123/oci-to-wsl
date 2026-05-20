@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,6 +22,26 @@ import (
 // aadScope is the scope used when requesting an AAD token to exchange for an
 // ACR refresh token. ACR requires a token scoped to the ARM resource.
 const aadScope = "https://management.azure.com/.default"
+
+// envDisableACRAAD, when set to a value parseable as true by strconv.ParseBool
+// (e.g. "1", "t", "true", "True", "TRUE"), disables AAD-based ACR
+// authentication entirely. Pulls against *.azurecr.io/.cn/.us hosts then go
+// through the normal docker keychain like any other registry, letting
+// operators supply a username/password (or token) via `docker login` /
+// $DOCKER_CONFIG instead of acquiring an AAD token.
+const envDisableACRAAD = "OCI_TO_WSL_NO_ACR_AAD"
+
+// isACRAADDisabled reports whether the user has opted out of AAD-based ACR
+// authentication via the OCI_TO_WSL_NO_ACR_AAD environment variable. The
+// value is parsed with strconv.ParseBool, so any of 1/t/T/TRUE/true/True
+// (and their false-y counterparts) are accepted.
+func isACRAADDisabled() bool {
+	v, err := strconv.ParseBool(os.Getenv(envDisableACRAAD))
+	if err != nil {
+		return false
+	}
+	return v
+}
 
 // acrAuthenticator implements authn.Authenticator for Azure Container Registry.
 type acrAuthenticator struct {
