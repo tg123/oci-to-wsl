@@ -7,7 +7,7 @@ Load an OCI container-registry image directly into a **Windows Subsystem for Lin
 1. Download the latest `oci-to-wsl.exe` from the [GitHub Releases page](https://github.com/tg123/oci-to-wsl/releases/latest) and place it somewhere on your `PATH`, or run the one-liner below from PowerShell to fetch and extract it into the current directory:
 
    ```powershell
-   $arch=if($env:PROCESSOR_ARCHITECTURE -eq 'ARM64'){'arm64'}else{'x86_64'}; $url=((Invoke-RestMethod https://api.github.com/repos/tg123/oci-to-wsl/releases/latest).assets|?{$_.name -eq "oci-to-wsl_windows_$arch.zip"}).browser_download_url; $zip="$env:TEMP\oci-to-wsl.zip"; Invoke-WebRequest $url -OutFile $zip; Expand-Archive -Force $zip -DestinationPath .; Remove-Item $zip
+   $arch=if($env:PROCESSOR_ARCHITECTURE -eq 'ARM64'){'arm64'}else{'x86_64'}; $url="https://github.com/tg123/oci-to-wsl/releases/latest/download/oci-to-wsl_windows_$arch.zip"; $zip="$env:TEMP\oci-to-wsl.zip"; Invoke-WebRequest $url -OutFile $zip; Expand-Archive -Force $zip -DestinationPath .; Remove-Item $zip
    ```
 
 2. Run it from PowerShell:
