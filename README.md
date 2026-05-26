@@ -7,7 +7,7 @@ Load an OCI container-registry image directly into a **Windows Subsystem for Lin
 1. Download the latest `oci-to-wsl.exe` from the [GitHub Releases page](https://github.com/tg123/oci-to-wsl/releases/latest) and place it somewhere on your `PATH`, or run the one-liner below from PowerShell to fetch and extract it into the current directory:
 
    ```powershell
-   $arch=if($env:PROCESSOR_ARCHITECTURE -eq 'ARM64'){'arm64'}else{'x86_64'}; $url="https://github.com/tg123/oci-to-wsl/releases/latest/download/oci-to-wsl_windows_$arch.zip"; $zip="$env:TEMP\oci-to-wsl.zip"; Invoke-WebRequest $url -OutFile $zip; Expand-Archive -Force $zip -DestinationPath .; Remove-Item $zip
+   $arch=switch(($env:PROCESSOR_ARCHITECTURE+'').ToUpperInvariant()){'ARM64'{'arm64'}'AMD64'{'x86_64'}default{throw "Unsupported architecture '$env:PROCESSOR_ARCHITECTURE'. Supported values: AMD64, ARM64."}}; $url="https://github.com/tg123/oci-to-wsl/releases/latest/download/oci-to-wsl_windows_$arch.zip"; $zip=Join-Path $env:TEMP "oci-to-wsl.zip"; $tmp=Join-Path $env:TEMP ("oci-to-wsl-"+[guid]::NewGuid()); New-Item -ItemType Directory -Path $tmp | Out-Null; Invoke-WebRequest $url -OutFile $zip; Expand-Archive -Force $zip -DestinationPath $tmp; Move-Item -Force (Join-Path $tmp "oci-to-wsl.exe") .; Remove-Item -Recurse -Force $tmp; Remove-Item $zip
    ```
 
 2. Run it from PowerShell:
