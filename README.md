@@ -4,7 +4,13 @@ Load an OCI container-registry image directly into a **Windows Subsystem for Lin
 
 ## Quick start
 
-1. Download the latest `oci-to-wsl.exe` from the [GitHub Releases page](https://github.com/tg123/oci-to-wsl/releases/latest) and place it somewhere on your `PATH`.
+1. Install `oci-to-wsl`:
+
+   ```powershell
+   winget install tg123.oci-to-wsl
+   ```
+
+   Or download the latest `oci-to-wsl.exe` from the [GitHub Releases page](https://github.com/tg123/oci-to-wsl/releases/latest) and place it somewhere on your `PATH`.
 2. Run it from PowerShell:
 
 ```powershell
