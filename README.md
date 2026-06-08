@@ -177,16 +177,24 @@ See [`example-profile.yaml`](example-profile.yaml) for a complete example.
 ## GitHub Action
 
 `oci-to-wsl` ships as a reusable GitHub Action so you can import an OCI image
-into a WSL distribution from a workflow. It must run on a Windows runner that
-has WSL available (e.g. `windows-latest`); the action downloads the matching
+into a WSL distribution from a workflow. The action downloads the matching
 released `oci-to-wsl.exe` and runs it for you.
+
+> [!IMPORTANT]
+> **Runner requirement:** the action only works on Windows runners that have
+> **WSL 2** enabled, because importing a rootfs uses `wsl --import` (a WSL 2
+> feature). Use `windows-2025` — on the GitHub-hosted images WSL 2 is enabled
+> by default only on Windows Server 2025; `windows-2022` ships WSL 1 only.
+> `windows-latest` is acceptable once it points to Windows Server 2025; until
+> then pin `runs-on: windows-2025`. Self-hosted Windows runners must have the
+> WSL 2 feature installed.
 
 Import a simple image:
 
 ```yaml
 jobs:
   wsl:
-    runs-on: windows-latest
+    runs-on: windows-2025
     steps:
       - uses: tg123/oci-to-wsl@main
         with:
@@ -202,7 +210,7 @@ etc.) instead of a bare image:
 ```yaml
 jobs:
   wsl:
-    runs-on: windows-latest
+    runs-on: windows-2025
     steps:
       - uses: actions/checkout@v6
       - uses: tg123/oci-to-wsl@main
@@ -230,6 +238,29 @@ jobs:
 
 See [`.github/workflows/example-action.yml`](.github/workflows/example-action.yml)
 for a complete example.
+
+### Publishing to the GitHub Marketplace
+
+This repository already contains the metadata the Marketplace requires: an
+[`action.yml`](action.yml) in the repository root with a unique `name`, a
+`description`, and a `branding` (icon + color) block. To publish it:
+
+1. Make sure the repository is **public** and that `action.yml` lives in the
+   repository root (a repo can only publish one Marketplace action from its
+   root).
+2. Draft a new release: **Releases → Draft a new release** and choose a
+   semantic-version tag (e.g. `v1`).
+3. GitHub detects `action.yml` and shows a **"Publish this Action to the
+   GitHub Marketplace"** checkbox above the release notes — tick it, accept
+   the GitHub Marketplace Developer Agreement (first time only), and pick a
+   primary and secondary category.
+4. Resolve anything flagged in the validation checklist (a unique action name,
+   a complete `branding` block, etc.), then **Publish release**.
+
+After it is live, consumers reference it as `tg123/oci-to-wsl@v1`. Moving the
+`v1` tag to each new release lets them stay on the major version; the action's
+`version` input still controls which `oci-to-wsl.exe` release is downloaded at
+run time.
 
 ## Building from source
 

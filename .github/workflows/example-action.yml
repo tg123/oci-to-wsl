@@ -9,7 +9,7 @@ on:
 jobs:
   simple-image:
     name: Import a simple image
-    runs-on: windows-latest
+    runs-on: windows-2025
     steps:
       - name: Import ubuntu:22.04 into WSL
         uses: tg123/oci-to-wsl@main
@@ -23,7 +23,7 @@ jobs:
 
   from-profile:
     name: Import using a YAML profile (with staged files)
-    runs-on: windows-latest
+    runs-on: windows-2025
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
