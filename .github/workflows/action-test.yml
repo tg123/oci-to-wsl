@@ -1,0 +1,59 @@
+# Smoke-tests the composite action defined in ./action.yml by running it
+# against this repository's own checkout (uses: ./). This is how the action
+# itself is verified in CI: it imports a small image into WSL and then runs a
+# command inside the resulting distribution.
+name: Action test
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    paths:
+      - 'action.yml'
+      - '.github/workflows/action-test.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  action-image:
+    name: Import a simple image via the action
+    runs-on: windows-2025
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      # Exercise the local action (uses: ./) so the version on this branch is
+      # what gets tested, not a published Marketplace release.
+      - name: Run oci-to-wsl action
+        id: import
+        uses: ./
+        with:
+          image: alpine:3.20
+          name: action-test-alpine
+
+      - name: Verify the distribution works
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # The image was imported above; confirm the distro is registered and
+          # that a command runs inside it.
+          wsl --list --verbose
+          $out = wsl -d action-test-alpine -- cat /etc/os-release
+          $out
+          if ($out -notmatch 'Alpine') {
+            throw "expected Alpine in /etc/os-release, got: $out"
+          }
+
+      - name: Verify action output
+        shell: pwsh
+        run: |
+          if (-not (Test-Path '${{ steps.import.outputs.binary }}')) {
+            throw 'action did not expose a valid "binary" output'
+          }
+
+      - name: Tear down the distribution
+        if: always()
+        shell: pwsh
+        run: wsl --unregister action-test-alpine

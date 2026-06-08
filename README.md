@@ -239,6 +239,16 @@ jobs:
 See [`.github/workflows/example-action.yml`](.github/workflows/example-action.yml)
 for a complete example.
 
+### Testing the action
+
+The action is smoke-tested in CI by
+[`.github/workflows/action-test.yml`](.github/workflows/action-test.yml): it
+runs the action from the local checkout (`uses: ./`) on a `windows-2025`
+runner, imports `alpine:3.20`, and asserts a command runs inside the resulting
+distribution. To verify a change to `action.yml`, run that workflow (it also
+triggers on `workflow_dispatch`) or copy the job into your own repository and
+point `uses:` at the branch/tag you want to test.
+
 ### Publishing to the GitHub Marketplace
 
 This repository already contains the metadata the Marketplace requires: an
