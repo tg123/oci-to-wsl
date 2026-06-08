@@ -42,7 +42,7 @@ jobs:
           wsl --list --verbose
           $out = wsl -d action-test-alpine -- cat /etc/os-release
           $out
-          if ($out -notmatch 'Alpine') {
+          if (($out -join "`n") -notmatch 'Alpine') {
             throw "expected Alpine in /etc/os-release, got: $out"
           }
 
