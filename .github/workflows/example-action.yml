@@ -1,0 +1,36 @@
+# Example workflow showing how to consume the oci-to-wsl action to import an
+# OCI image into a WSL distribution on a Windows runner. Copy this into your
+# own repository's .github/workflows/ directory and adjust the inputs.
+name: oci-to-wsl example
+
+on:
+  workflow_dispatch:
+
+jobs:
+  simple-image:
+    name: Import a simple image
+    runs-on: windows-latest
+    steps:
+      - name: Import ubuntu:22.04 into WSL
+        uses: tg123/oci-to-wsl@main
+        with:
+          image: ubuntu:22.04
+          name: my-ubuntu
+
+      - name: Use the new distribution
+        shell: pwsh
+        run: wsl -d my-ubuntu -- cat /etc/os-release
+
+  from-profile:
+    name: Import using a YAML profile (with staged files)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      # The profile may reference files on the runner (files[].src) which are
+      # staged into the rootfs tar before "wsl --import" runs.
+      - name: Import from profile
+        uses: tg123/oci-to-wsl@main
+        with:
+          profile: ./example-profile.yaml

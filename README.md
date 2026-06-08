@@ -174,6 +174,63 @@ init_cmds:                       # optional – run inside the new distro after 
 
 See [`example-profile.yaml`](example-profile.yaml) for a complete example.
 
+## GitHub Action
+
+`oci-to-wsl` ships as a reusable GitHub Action so you can import an OCI image
+into a WSL distribution from a workflow. It must run on a Windows runner that
+has WSL available (e.g. `windows-latest`); the action downloads the matching
+released `oci-to-wsl.exe` and runs it for you.
+
+Import a simple image:
+
+```yaml
+jobs:
+  wsl:
+    runs-on: windows-latest
+    steps:
+      - uses: tg123/oci-to-wsl@main
+        with:
+          image: ubuntu:22.04
+          name: my-ubuntu
+
+      - run: wsl -d my-ubuntu -- cat /etc/os-release
+```
+
+Use a YAML profile (which can stage `files`, create `users`, run `init_cmds`,
+etc.) instead of a bare image:
+
+```yaml
+jobs:
+  wsl:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: tg123/oci-to-wsl@main
+        with:
+          profile: ./ubuntu.yaml
+```
+
+### Action inputs
+
+| Input | Description |
+|---|---|
+| `image` | OCI image reference to import (ignored when `profile` is set) |
+| `name` | WSL distribution name (required unless the profile sets it or `save-tar` is used) |
+| `profile` | Path to a YAML profile file; overrides `image`/`name`/`dir` when set |
+| `dir` | Directory to store the WSL virtual disk (default: `.\<name>`) |
+| `save-tar` | Write the rootfs tar to this path and skip `wsl --import` |
+| `loglevel` | Logging verbosity: `debug`, `info` (default), `warn`, or `error` |
+| `version` | Release of `oci-to-wsl` to download, e.g. `v1.2.3` (default: `latest`) |
+
+### Action outputs
+
+| Output | Description |
+|---|---|
+| `binary` | Path to the `oci-to-wsl.exe` binary that was downloaded and used |
+
+See [`.github/workflows/example-action.yml`](.github/workflows/example-action.yml)
+for a complete example.
+
 ## Building from source
 
 ```powershell

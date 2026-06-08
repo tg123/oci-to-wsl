@@ -1,0 +1,120 @@
+name: 'oci-to-wsl'
+description: 'Import an OCI container image into a Windows Subsystem for Linux (WSL) distribution.'
+author: 'tg123'
+branding:
+  icon: 'package'
+  color: 'blue'
+
+# This action runs the oci-to-wsl CLI on a Windows runner to pull an OCI
+# image (or apply a full YAML profile, including staged files) and import it
+# as a WSL distribution. It only works on Windows runners that have WSL
+# available (e.g. windows-latest).
+inputs:
+  image:
+    description: 'OCI image reference to import, e.g. ubuntu:22.04 or myacr.azurecr.io/myimage:latest. Ignored when "profile" is set.'
+    required: false
+  name:
+    description: 'WSL distribution name to create. Required unless "profile" sets it or "save-tar" is used.'
+    required: false
+  profile:
+    description: 'Path to a YAML profile file describing the image, files, users, init_cmds, etc. Overrides "image"/"name"/"dir" when set.'
+    required: false
+  dir:
+    description: 'Directory to store the WSL virtual disk (default: .\<name>).'
+    required: false
+  save-tar:
+    description: 'Write the exported rootfs tar to this path and skip "wsl --import".'
+    required: false
+  loglevel:
+    description: 'Logging verbosity: debug, info, warn, or error.'
+    required: false
+    default: 'info'
+  version:
+    description: 'Release of oci-to-wsl to download, e.g. v1.2.3. Defaults to "latest".'
+    required: false
+    default: 'latest'
+
+outputs:
+  binary:
+    description: 'Path to the oci-to-wsl.exe binary that was downloaded and used.'
+    value: ${{ steps.run.outputs.binary }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Run oci-to-wsl
+      id: run
+      shell: pwsh
+      env:
+        OCI_TO_WSL_IMAGE: ${{ inputs.image }}
+        OCI_TO_WSL_NAME: ${{ inputs.name }}
+        OCI_TO_WSL_PROFILE: ${{ inputs.profile }}
+        OCI_TO_WSL_DIR: ${{ inputs.dir }}
+        OCI_TO_WSL_SAVE_TAR: ${{ inputs.save-tar }}
+        OCI_TO_WSL_LOGLEVEL: ${{ inputs.loglevel }}
+        OCI_TO_WSL_VERSION: ${{ inputs.version }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+
+        if (-not $IsWindows) {
+          throw 'The oci-to-wsl action requires a Windows runner with WSL (e.g. runs-on: windows-latest).'
+        }
+
+        $arch = switch (($env:PROCESSOR_ARCHITECTURE + '').ToUpperInvariant()) {
+          'ARM64' { 'arm64' }
+          'AMD64' { 'x86_64' }
+          default { throw "Unsupported architecture '$env:PROCESSOR_ARCHITECTURE'. Supported values: AMD64, ARM64." }
+        }
+
+        $version = $env:OCI_TO_WSL_VERSION
+        if ([string]::IsNullOrWhiteSpace($version) -or $version -eq 'latest') {
+          $url = "https://github.com/tg123/oci-to-wsl/releases/latest/download/oci-to-wsl_windows_$arch.zip"
+        } else {
+          $url = "https://github.com/tg123/oci-to-wsl/releases/download/$version/oci-to-wsl_windows_$arch.zip"
+        }
+
+        $work = Join-Path $env:RUNNER_TEMP ("oci-to-wsl-" + [guid]::NewGuid())
+        New-Item -ItemType Directory -Path $work | Out-Null
+        $zip = Join-Path $work 'oci-to-wsl.zip'
+
+        Write-Host "Downloading oci-to-wsl from $url"
+        Invoke-WebRequest -Uri $url -OutFile $zip
+        Expand-Archive -Force -Path $zip -DestinationPath $work
+        $binary = Join-Path $work 'oci-to-wsl.exe'
+        if (-not (Test-Path $binary)) {
+          throw "oci-to-wsl.exe not found after extracting $url"
+        }
+
+        # Build the argument list from the provided inputs. A profile, when
+        # set, supersedes the individual image/name/dir inputs (mirroring the
+        # CLI's own precedence), so they are only forwarded when no profile is
+        # given.
+        $cliArgs = @()
+        if (-not [string]::IsNullOrWhiteSpace($env:OCI_TO_WSL_PROFILE)) {
+          $cliArgs += @('--profile', $env:OCI_TO_WSL_PROFILE)
+        } else {
+          if ([string]::IsNullOrWhiteSpace($env:OCI_TO_WSL_IMAGE)) {
+            throw 'Provide either "profile" or "image" input.'
+          }
+          $cliArgs += @('--image', $env:OCI_TO_WSL_IMAGE)
+          if (-not [string]::IsNullOrWhiteSpace($env:OCI_TO_WSL_NAME)) {
+            $cliArgs += @('--name', $env:OCI_TO_WSL_NAME)
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:OCI_TO_WSL_DIR)) {
+            $cliArgs += @('--dir', $env:OCI_TO_WSL_DIR)
+          }
+        }
+        if (-not [string]::IsNullOrWhiteSpace($env:OCI_TO_WSL_SAVE_TAR)) {
+          $cliArgs += @('--save-tar', $env:OCI_TO_WSL_SAVE_TAR)
+        }
+        if (-not [string]::IsNullOrWhiteSpace($env:OCI_TO_WSL_LOGLEVEL)) {
+          $cliArgs += @('--loglevel', $env:OCI_TO_WSL_LOGLEVEL)
+        }
+
+        "binary=$binary" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+        Write-Host "Running: oci-to-wsl $($cliArgs -join ' ')"
+        & $binary @cliArgs
+        if ($LASTEXITCODE -ne 0) {
+          throw "oci-to-wsl exited with code $LASTEXITCODE"
+        }
