@@ -57,9 +57,11 @@ runs:
         $ErrorActionPreference = 'Stop'
 
         if (-not $IsWindows) {
-          throw 'The oci-to-wsl action requires a Windows runner with WSL (e.g. runs-on: windows-latest).'
+          throw 'The oci-to-wsl action requires a Windows runner.'
         }
-
+        if (-not (Get-Command wsl -ErrorAction SilentlyContinue)) {
+          throw 'The oci-to-wsl action requires WSL to be installed/enabled (wsl.exe not found).'
+        }
         $arch = switch (($env:PROCESSOR_ARCHITECTURE + '').ToUpperInvariant()) {
           'ARM64' { 'arm64' }
           'AMD64' { 'x86_64' }
@@ -85,10 +87,10 @@ runs:
           throw "oci-to-wsl.exe not found after extracting $url"
         }
 
-        # Build the argument list from the provided inputs. A profile, when
-        # set, supersedes the individual image/name/dir inputs (mirroring the
-        # CLI's own precedence), so they are only forwarded when no profile is
-        # given.
+        # Build the argument list from the provided inputs. To avoid ambiguity,
+        # this action treats "profile" as mutually exclusive with the individual
+        # image/name/dir inputs, so those flags are only forwarded when no
+        # profile is given.
         $cliArgs = @()
         if (-not [string]::IsNullOrWhiteSpace($env:OCI_TO_WSL_PROFILE)) {
           $cliArgs += @('--profile', $env:OCI_TO_WSL_PROFILE)
