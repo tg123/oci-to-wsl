@@ -530,3 +530,54 @@ if got.hdr.Size != int64(len(body)) {
 t.Errorf("binary src size: got %d, want %d", got.hdr.Size, len(body))
 }
 }
+
+func TestInjectCopies_ForceLFDirectoryTreeMixedBinary(t *testing.T) {
+dir := t.TempDir()
+srcDir := filepath.Join(dir, "tree")
+if err := os.MkdirAll(filepath.Join(srcDir, "sub"), 0755); err != nil {
+t.Fatal(err)
+}
+// Two text files (one at the root, one nested) plus a binary file: all
+// text files under the directory must be normalised, the binary left intact.
+if err := os.WriteFile(filepath.Join(srcDir, "a.txt"), []byte("x\r\ny\r\n"), 0644); err != nil {
+t.Fatal(err)
+}
+if err := os.WriteFile(filepath.Join(srcDir, "sub", "b.txt"), []byte("p\r\nq\r\n"), 0644); err != nil {
+t.Fatal(err)
+}
+binBody := []byte{'m', '\r', '\n', 0x00, 'n', '\r', '\n'}
+if err := os.WriteFile(filepath.Join(srcDir, "data.bin"), binBody, 0644); err != nil {
+t.Fatal(err)
+}
+tarPath := filepath.Join(dir, "rootfs.tar")
+writeEmptyTar(t, tarPath)
+
+if err := wsl.InjectCopies(tarPath, []wsl.CopyEntry{
+{Src: srcDir, Dst: "/opt/tree", ForceLF: true},
+}); err != nil {
+t.Fatalf("InjectCopies: %v", err)
+}
+
+entries := readTar(t, tarPath)
+
+for name, want := range map[string]string{
+"opt/tree/a.txt":     "x\ny\n",
+"opt/tree/sub/b.txt": "p\nq\n",
+} {
+got, ok := entries[name]
+if !ok {
+t.Fatalf("missing %s; have %v", name, keysOf(entries))
+}
+if string(got.body) != want {
+t.Errorf("%s body: got %q, want %q", name, got.body, want)
+}
+}
+
+gotBin, ok := entries["opt/tree/data.bin"]
+if !ok {
+t.Fatalf("missing opt/tree/data.bin; have %v", keysOf(entries))
+}
+if !bytes.Equal(gotBin.body, binBody) {
+t.Errorf("data.bin body should be unchanged: got %v, want %v", gotBin.body, binBody)
+}
+}
