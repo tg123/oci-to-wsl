@@ -199,8 +199,8 @@ This is **off by default** because it widens the trust placed in the remote
 profile. When enabled, fetched file references are constrained for safety:
 each `src` must be a relative path that stays on the **same scheme and host**
 as the profile URL and **within the profile's directory** (no absolute URLs,
-no `../` escapes), and cross-host redirects are refused. Downloaded files are
-size-limited like the profile itself.
+no `../` escapes), and cross-host redirects are refused. Downloaded files are size-limited like the profile itself (default 1 MiB;
+override via `OCI_TO_WSL_MAX_PROFILE_SIZE` in bytes).
 
 ## GitHub Action
 

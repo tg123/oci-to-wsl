@@ -699,6 +699,30 @@ func TestLoadProfile_FromURLRejectsCrossSchemeRedirect(t *testing.T) {
 	}
 }
 
+func TestLoadProfile_FromStdinHonorsMaxProfileSizeEnv(t *testing.T) {
+	t.Setenv("OCI_TO_WSL_MAX_PROFILE_SIZE", "16")
+	yaml := "name: stdin-distro\nimage: alpine:latest\n"
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.WriteString(yaml); err != nil {
+		t.Fatal(err)
+	}
+	_ = w.Close()
+
+	orig := os.Stdin
+	os.Stdin = r
+	defer func() { os.Stdin = orig; _ = r.Close() }()
+
+	if _, err := config.LoadProfile("-"); err == nil {
+		t.Fatal("expected size-limit error, got nil")
+	} else if !strings.Contains(err.Error(), "profile exceeds maximum size") {
+		t.Fatalf("error = %v, want size-limit message", err)
+	}
+}
+
 func writeAndLoad(t *testing.T, yamlContent string) *config.Profile {
 	t.Helper()
 	dir := t.TempDir()

@@ -559,6 +559,7 @@ func readProfile(path string) (data []byte, baseDir, baseURL string, err error) 
 // opt-in (default off) because fetching files named by a remote document
 // broadens the trust placed in that document.
 const envFollowProfileURL = "OCI_TO_WSL_PROFILE_FOLLOW_URL"
+const envMaxProfileSize = "OCI_TO_WSL_MAX_PROFILE_SIZE"
 
 // isFollowProfileURLEnabled reports whether relative profile file sources
 // should be downloaded over the network for URL-loaded profiles. Controlled
@@ -580,20 +581,37 @@ func isHTTPURL(s string) bool {
 	return strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")
 }
 
-// maxProfileSize caps how many bytes are read from stdin or an http(s)
-// response when loading a profile. Profiles are expected to be small, so
-// this guards against excessive memory usage or OOM from unbounded input.
-const maxProfileSize = 1 << 20 // 1 MiB
+// defaultMaxProfileSize caps how many bytes are read from stdin or an http(s)
+// response when loading a profile by default. Profiles are expected to be
+// small, so this guards against excessive memory usage or OOM from unbounded
+// input.
+const defaultMaxProfileSize int64 = 1 << 20 // 1 MiB
+
+// maxProfileSize reports the profile read limit in bytes. It defaults to
+// 1 MiB, and can be overridden by OCI_TO_WSL_MAX_PROFILE_SIZE with a positive
+// integer byte count.
+func maxProfileSize() int64 {
+	v := strings.TrimSpace(os.Getenv(envMaxProfileSize))
+	if v == "" {
+		return defaultMaxProfileSize
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || n <= 0 {
+		return defaultMaxProfileSize
+	}
+	return n
+}
 
 // readLimited reads up to maxProfileSize bytes from r and errors if the
 // input exceeds that limit.
 func readLimited(r io.Reader) ([]byte, error) {
-	data, err := io.ReadAll(io.LimitReader(r, maxProfileSize+1))
+	limit := maxProfileSize()
+	data, err := io.ReadAll(io.LimitReader(r, limit+1))
 	if err != nil {
 		return nil, err
 	}
-	if len(data) > maxProfileSize {
-		return nil, fmt.Errorf("profile exceeds maximum size of %d bytes", maxProfileSize)
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("profile exceeds maximum size of %d bytes", limit)
 	}
 	return data, nil
 }
