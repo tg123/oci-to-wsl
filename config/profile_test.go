@@ -478,7 +478,8 @@ func TestProfile_Validate(t *testing.T) {
 	}
 }
 
-// writeAndLoad writes yaml content to a temp file and calls LoadProfile.
+// TestLoadProfile_FromStdin verifies LoadProfile reads a profile from stdin
+// when the path is "-".
 func TestLoadProfile_FromStdin(t *testing.T) {
 	yaml := "name: stdin-distro\nimage: alpine:latest\n"
 
@@ -493,7 +494,7 @@ func TestLoadProfile_FromStdin(t *testing.T) {
 
 	orig := os.Stdin
 	os.Stdin = r
-	defer func() { os.Stdin = orig }()
+	defer func() { os.Stdin = orig; _ = r.Close() }()
 
 	p, err := config.LoadProfile("-")
 	if err != nil {
@@ -538,7 +539,7 @@ func TestLoadProfile_FromStdinResolvesRelativeSrc(t *testing.T) {
 
 	orig := os.Stdin
 	os.Stdin = r
-	defer func() { os.Stdin = orig }()
+	defer func() { os.Stdin = orig; _ = r.Close() }()
 
 	p, err := config.LoadProfile("-")
 	if err != nil {

@@ -501,7 +501,7 @@ func LoadProfile(path string) (*Profile, error) {
 func readProfile(path string) (data []byte, baseDir string, err error) {
 	switch {
 	case path == "-":
-		data, err = io.ReadAll(os.Stdin)
+		data, err = readLimited(os.Stdin)
 		if err != nil {
 			return nil, "", fmt.Errorf("reading profile from stdin: %w", err)
 		}
@@ -521,9 +521,30 @@ func readProfile(path string) (data []byte, baseDir string, err error) {
 	}
 }
 
-// isHTTPURL reports whether s looks like an http:// or https:// URL.
+// isHTTPURL reports whether s looks like an http:// or https:// URL. The
+// scheme comparison is case-insensitive, since URL schemes are not
+// case-sensitive (e.g. "HTTPS://" is valid).
 func isHTTPURL(s string) bool {
-	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
+	lower := strings.ToLower(s)
+	return strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")
+}
+
+// maxProfileSize caps how many bytes are read from stdin or an http(s)
+// response when loading a profile. Profiles are expected to be small, so
+// this guards against excessive memory usage or OOM from unbounded input.
+const maxProfileSize = 1 << 20 // 1 MiB
+
+// readLimited reads up to maxProfileSize bytes from r and errors if the
+// input exceeds that limit.
+func readLimited(r io.Reader) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, maxProfileSize+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxProfileSize {
+		return nil, fmt.Errorf("profile exceeds maximum size of %d bytes", maxProfileSize)
+	}
+	return data, nil
 }
 
 // workingDir returns the current working directory, falling back to "." if
@@ -546,12 +567,13 @@ func fetchProfileURL(url string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("fetching profile %q: unexpected status %s", url, resp.Status)
 	}
-	data, err := io.ReadAll(resp.Body)
+	data, err := readLimited(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("reading profile %q: %w", url, err)
 	}
 	return data, nil
 }
+
 // NAME must be at least one non-% character to avoid matching a literal "%%".
 var winEnvVarRE = regexp.MustCompile(`%([^%]+)%`)
 
