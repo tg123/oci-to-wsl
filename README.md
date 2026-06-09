@@ -28,6 +28,12 @@ oci-to-wsl.exe --image myacr.azurecr.io/myimage:latest --name myimage
 
 # Using a YAML profile
 oci-to-wsl.exe --profile ubuntu.yaml
+
+# Read a profile from stdin (like `kubectl apply -f -`)
+cat ubuntu.yaml | oci-to-wsl.exe --profile -
+
+# Fetch a profile over the network
+oci-to-wsl.exe --profile https://example.com/ubuntu.yaml
 ```
 
 ## Image sources
@@ -295,7 +301,7 @@ No credentials are stored on disk by this tool.
 
 | Flag | Description |
 |---|---|
-| `--profile <path>` | Path to a YAML profile file |
+| `--profile <path>` | Path to a YAML profile file. Use `-` to read from stdin or an `http(s)://` URL to fetch one over the network (like `kubectl apply -f`) |
 | `--image <ref>` | OCI image reference (required without `--profile`) |
 | `--name <distro>` | WSL distribution name (required without `--profile`) |
 | `--dir <path>` | Directory to store the WSL virtual disk (default: `.\<name>`) |

@@ -3,10 +3,13 @@ package config
 import (
 	"encoding/base64"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -398,11 +401,20 @@ func (p *Profile) Validate() error {
 	return nil
 }
 
-// LoadProfile reads a YAML profile from the given file path.
+// LoadProfile reads a YAML profile from the given location. As with
+// `kubectl apply -f`, the location may be:
+//
+//   - a path on the host filesystem (the default);
+//   - "-" to read the profile from standard input;
+//   - an http:// or https:// URL to fetch the profile over the network.
+//
+// Relative `files` sources are resolved against the directory of the
+// profile file. For stdin and URLs there is no such directory, so they are
+// resolved against the current working directory instead.
 func LoadProfile(path string) (*Profile, error) {
-	data, err := os.ReadFile(path)
+	data, baseDir, err := readProfile(path)
 	if err != nil {
-		return nil, fmt.Errorf("reading profile %q: %w", path, err)
+		return nil, err
 	}
 	var p Profile
 	if err := yaml.Unmarshal(data, &p); err != nil {
@@ -422,7 +434,6 @@ func LoadProfile(path string) (*Profile, error) {
 	// references and a leading ~ for the user's home folder, then resolve
 	// remaining relative paths against the profile file's directory so
 	// profiles remain portable regardless of the caller's CWD.
-	baseDir := filepath.Dir(path)
 	for i := range p.Files {
 		p.Files[i].Dst = ExpandEnvVars(p.Files[i].Dst)
 		src := p.Files[i].Src
@@ -481,7 +492,66 @@ func LoadProfile(path string) (*Profile, error) {
 	return &p, nil
 }
 
-// winEnvVarRE matches Windows-style %NAME% environment variable references.
+// readProfile resolves a profile location to its raw bytes and the base
+// directory used to resolve relative `files` sources. It supports a local
+// file path, "-" for standard input, and http(s):// URLs, mirroring the
+// input handling of `kubectl apply -f`. For stdin and URLs there is no
+// enclosing directory, so the current working directory is used as the
+// base (falling back to "." if it cannot be determined).
+func readProfile(path string) (data []byte, baseDir string, err error) {
+	switch {
+	case path == "-":
+		data, err = io.ReadAll(os.Stdin)
+		if err != nil {
+			return nil, "", fmt.Errorf("reading profile from stdin: %w", err)
+		}
+		return data, workingDir(), nil
+	case isHTTPURL(path):
+		data, err = fetchProfileURL(path)
+		if err != nil {
+			return nil, "", err
+		}
+		return data, workingDir(), nil
+	default:
+		data, err = os.ReadFile(path)
+		if err != nil {
+			return nil, "", fmt.Errorf("reading profile %q: %w", path, err)
+		}
+		return data, filepath.Dir(path), nil
+	}
+}
+
+// isHTTPURL reports whether s looks like an http:// or https:// URL.
+func isHTTPURL(s string) bool {
+	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
+}
+
+// workingDir returns the current working directory, falling back to "." if
+// it cannot be determined.
+func workingDir() string {
+	if wd, err := os.Getwd(); err == nil {
+		return wd
+	}
+	return "."
+}
+
+// fetchProfileURL downloads a profile over http(s) and returns its body.
+func fetchProfileURL(url string) ([]byte, error) {
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("fetching profile %q: %w", url, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("fetching profile %q: unexpected status %s", url, resp.Status)
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading profile %q: %w", url, err)
+	}
+	return data, nil
+}
 // NAME must be at least one non-% character to avoid matching a literal "%%".
 var winEnvVarRE = regexp.MustCompile(`%([^%]+)%`)
 

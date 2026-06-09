@@ -1,6 +1,9 @@
 package config_test
 
 import (
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -476,6 +479,113 @@ func TestProfile_Validate(t *testing.T) {
 }
 
 // writeAndLoad writes yaml content to a temp file and calls LoadProfile.
+func TestLoadProfile_FromStdin(t *testing.T) {
+	yaml := "name: stdin-distro\nimage: alpine:latest\n"
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.WriteString(yaml); err != nil {
+		t.Fatal(err)
+	}
+	_ = w.Close()
+
+	orig := os.Stdin
+	os.Stdin = r
+	defer func() { os.Stdin = orig }()
+
+	p, err := config.LoadProfile("-")
+	if err != nil {
+		t.Fatalf("LoadProfile(-): unexpected error: %v", err)
+	}
+	if p.Name != "stdin-distro" {
+		t.Errorf("Name: got %q, want %q", p.Name, "stdin-distro")
+	}
+	if p.Image != "alpine:latest" {
+		t.Errorf("Image: got %q, want %q", p.Image, "alpine:latest")
+	}
+}
+
+func TestLoadProfile_FromStdinResolvesRelativeSrc(t *testing.T) {
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "bootstrap.sh")
+	if err := os.WriteFile(srcPath, []byte("#!/bin/sh\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Relative `src` should resolve against the current working directory
+	// for stdin (there is no profile file directory).
+	origWd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(origWd) }()
+
+	yaml := "name: stdin-distro\nimage: alpine:latest\nfiles:\n  - src: ./bootstrap.sh\n    dst: /opt/bootstrap.sh\n"
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.WriteString(yaml); err != nil {
+		t.Fatal(err)
+	}
+	_ = w.Close()
+
+	orig := os.Stdin
+	os.Stdin = r
+	defer func() { os.Stdin = orig }()
+
+	p, err := config.LoadProfile("-")
+	if err != nil {
+		t.Fatalf("LoadProfile(-): unexpected error: %v", err)
+	}
+	if len(p.Files) != 1 {
+		t.Fatalf("Files length: got %d, want 1", len(p.Files))
+	}
+	if !filepath.IsAbs(p.Files[0].Src) {
+		t.Errorf("Files[0].Src not absolute: %q", p.Files[0].Src)
+	}
+	if filepath.Base(p.Files[0].Src) != "bootstrap.sh" {
+		t.Errorf("Files[0].Src base: got %q, want bootstrap.sh", p.Files[0].Src)
+	}
+}
+
+func TestLoadProfile_FromURL(t *testing.T) {
+	yaml := "name: url-distro\nimage: alpine:latest\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, yaml)
+	}))
+	defer srv.Close()
+
+	p, err := config.LoadProfile(srv.URL)
+	if err != nil {
+		t.Fatalf("LoadProfile(url): unexpected error: %v", err)
+	}
+	if p.Name != "url-distro" {
+		t.Errorf("Name: got %q, want %q", p.Name, "url-distro")
+	}
+	if p.Image != "alpine:latest" {
+		t.Errorf("Image: got %q, want %q", p.Image, "alpine:latest")
+	}
+}
+
+func TestLoadProfile_FromURLNotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "nope", http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	_, err := config.LoadProfile(srv.URL)
+	if err == nil {
+		t.Fatal("expected error for non-200 response, got nil")
+	}
+}
+
 func writeAndLoad(t *testing.T, yamlContent string) *config.Profile {
 	t.Helper()
 	dir := t.TempDir()
