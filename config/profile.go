@@ -465,8 +465,10 @@ func LoadProfile(path string) (*Profile, error) {
 		// Network URLs are downloaded at staging time, not read from the
 		// host filesystem: only expand %VAR% / $VAR / ${VAR} and leave the
 		// URL otherwise intact (no profile-dir resolution, no ~ expansion).
+		// Surrounding whitespace is trimmed so detection (IsRemoteSrc trims
+		// before checking) and staging (fetchRemoteSrc) stay consistent.
 		if IsRemoteSrc(src) {
-			p.Files[i].Src = ExpandEnvVars(src)
+			p.Files[i].Src = strings.TrimSpace(ExpandEnvVars(src))
 			continue
 		}
 		src = ExpandHostPath(src)

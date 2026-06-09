@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/urfave/cli/v3"
 	"golang.org/x/term"
@@ -370,11 +371,18 @@ func fileEntryToCopy(f config.FileEntry) (wsl.CopyEntry, error) {
 	}
 }
 
+// remoteSrcTimeout bounds how long staging waits on a single remote `src`
+// download so a slow or stalled server cannot hang staging indefinitely.
+const remoteSrcTimeout = 30 * time.Second
+
 // fetchRemoteSrc downloads an http:// or https:// URL and returns its body.
 // A non-2xx response is treated as an error so a stray HTML error page is
-// not silently staged into the distribution.
+// not silently staged into the distribution. A bounded timeout ensures a
+// slow or stalled server cannot hang staging indefinitely.
 func fetchRemoteSrc(url string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), remoteSrcTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}

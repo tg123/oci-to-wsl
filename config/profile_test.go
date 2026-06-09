@@ -395,7 +395,8 @@ files:
 	}
 }
 
-func TestProfile_Validate(t *testing.T) {	empty := ""
+func TestProfile_Validate(t *testing.T) {
+	empty := ""
 	s := func(v string) *string { return &v }
 	cases := []struct {
 		name    string
