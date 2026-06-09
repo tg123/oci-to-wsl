@@ -587,6 +587,97 @@ func TestLoadProfile_FromURLNotFound(t *testing.T) {
 	}
 }
 
+func TestLoadProfile_FromURLFollowsRelativeSrc(t *testing.T) {
+	const body = "#!/bin/sh\necho hi\n"
+	mux := http.NewServeMux()
+	mux.HandleFunc("/dir/profile.yaml", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "name: url-distro\nimage: alpine:latest\nfiles:\n  - src: ./bootstrap.sh\n    dst: /opt/bootstrap.sh\n")
+	})
+	mux.HandleFunc("/dir/bootstrap.sh", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, body)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	t.Setenv("OCI_TO_WSL_PROFILE_FOLLOW_URL", "1")
+
+	p, err := config.LoadProfile(srv.URL + "/dir/profile.yaml")
+	if err != nil {
+		t.Fatalf("LoadProfile(url): unexpected error: %v", err)
+	}
+	if len(p.Files) != 1 {
+		t.Fatalf("Files length: got %d, want 1", len(p.Files))
+	}
+	if p.Files[0].Src != "" {
+		t.Errorf("Files[0].Src: got %q, want empty (downloaded)", p.Files[0].Src)
+	}
+	if err := p.Files[0].Validate(); err != nil {
+		t.Fatalf("Files[0].Validate: %v", err)
+	}
+	if got := string(p.Files[0].DecodedContentBase64()); got != body {
+		t.Errorf("Files[0] content: got %q, want %q", got, body)
+	}
+}
+
+func TestLoadProfile_FromURLDefaultDoesNotFollow(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/dir/profile.yaml", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "name: url-distro\nimage: alpine:latest\nfiles:\n  - src: ./bootstrap.sh\n    dst: /opt/bootstrap.sh\n")
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	// Without OCI_TO_WSL_PROFILE_FOLLOW_URL set, the relative src must be
+	// resolved on the local filesystem (current working directory), not
+	// downloaded over the network.
+	p, err := config.LoadProfile(srv.URL + "/dir/profile.yaml")
+	if err != nil {
+		t.Fatalf("LoadProfile(url): unexpected error: %v", err)
+	}
+	if len(p.Files) != 1 {
+		t.Fatalf("Files length: got %d, want 1", len(p.Files))
+	}
+	if p.Files[0].ContentBase64 != nil {
+		t.Errorf("Files[0].ContentBase64: got non-nil, want nil (no network follow)")
+	}
+	if !filepath.IsAbs(p.Files[0].Src) {
+		t.Errorf("Files[0].Src not absolute local path: %q", p.Files[0].Src)
+	}
+	if filepath.Base(p.Files[0].Src) != "bootstrap.sh" {
+		t.Errorf("Files[0].Src base: got %q, want bootstrap.sh", p.Files[0].Src)
+	}
+}
+
+func TestLoadProfile_FromURLRejectsAbsoluteURLSrc(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/dir/profile.yaml", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "name: n\nimage: i\nfiles:\n  - src: http://169.254.169.254/latest/meta-data\n    dst: /opt/x\n")
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	t.Setenv("OCI_TO_WSL_PROFILE_FOLLOW_URL", "1")
+
+	if _, err := config.LoadProfile(srv.URL + "/dir/profile.yaml"); err == nil {
+		t.Fatal("expected error for absolute-URL src, got nil")
+	}
+}
+
+func TestLoadProfile_FromURLRejectsParentEscape(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/dir/profile.yaml", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "name: n\nimage: i\nfiles:\n  - src: ../secret.sh\n    dst: /opt/x\n")
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	t.Setenv("OCI_TO_WSL_PROFILE_FOLLOW_URL", "1")
+
+	if _, err := config.LoadProfile(srv.URL + "/dir/profile.yaml"); err == nil {
+		t.Fatal("expected error for parent-directory-escaping src, got nil")
+	}
+}
+
 func writeAndLoad(t *testing.T, yamlContent string) *config.Profile {
 	t.Helper()
 	dir := t.TempDir()

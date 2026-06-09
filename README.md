@@ -34,6 +34,10 @@ cat ubuntu.yaml | oci-to-wsl.exe --profile -
 
 # Fetch a profile over the network
 oci-to-wsl.exe --profile https://example.com/ubuntu.yaml
+
+# Opt in to also downloading the profile's relative `files` sources from the
+# same URL (off by default; see the environment variables table)
+$env:OCI_TO_WSL_PROFILE_FOLLOW_URL=1; oci-to-wsl.exe --profile https://example.com/ubuntu.yaml
 ```
 
 ## Image sources
@@ -179,6 +183,24 @@ init_cmds:                       # optional – run inside the new distro after 
 ```
 
 See [`example-profile.yaml`](example-profile.yaml) for a complete example.
+
+When the profile is loaded from a `-`/stdin or an `http(s)://` URL there is no
+enclosing directory, so relative `files[].src` paths resolve against the
+current working directory. For URL profiles you can instead opt in to
+downloading those relative sources from the **same URL** by setting
+`OCI_TO_WSL_PROFILE_FOLLOW_URL=1` (also accepts `true`/`True`/`TRUE`/`t`):
+
+```powershell
+$env:OCI_TO_WSL_PROFILE_FOLLOW_URL = '1'
+oci-to-wsl.exe --profile https://example.com/profiles/ubuntu.yaml
+```
+
+This is **off by default** because it widens the trust placed in the remote
+profile. When enabled, fetched file references are constrained for safety:
+each `src` must be a relative path that stays on the **same scheme and host**
+as the profile URL and **within the profile's directory** (no absolute URLs,
+no `../` escapes), and cross-host redirects are refused. Downloaded files are
+size-limited like the profile itself.
 
 ## GitHub Action
 

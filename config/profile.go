@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -410,9 +413,12 @@ func (p *Profile) Validate() error {
 //
 // Relative `files` sources are resolved against the directory of the
 // profile file. For stdin and URLs there is no such directory, so they are
-// resolved against the current working directory instead.
+// resolved against the current working directory instead. When the profile
+// is loaded from a URL and OCI_TO_WSL_PROFILE_FOLLOW_URL is enabled, relative
+// `files` sources are instead resolved against — and downloaded from — the
+// profile's own URL.
 func LoadProfile(path string) (*Profile, error) {
-	data, baseDir, err := readProfile(path)
+	data, baseDir, baseURL, err := readProfile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -438,6 +444,20 @@ func LoadProfile(path string) (*Profile, error) {
 		p.Files[i].Dst = ExpandEnvVars(p.Files[i].Dst)
 		src := p.Files[i].Src
 		if src == "" {
+			continue
+		}
+		// When the profile itself came from an http(s):// URL and the
+		// operator opted into following the network (baseURL != ""),
+		// treat `src` as a sibling resource of the profile URL and
+		// download it over the network into an inline body, instead of
+		// reading from the local filesystem.
+		if baseURL != "" {
+			b64, ferr := fetchProfileFile(baseURL, src)
+			if ferr != nil {
+				return nil, ferr
+			}
+			p.Files[i].Src = ""
+			p.Files[i].ContentBase64 = &b64
 			continue
 		}
 		src = ExpandHostPath(src)
@@ -492,33 +512,64 @@ func LoadProfile(path string) (*Profile, error) {
 	return &p, nil
 }
 
-// readProfile resolves a profile location to its raw bytes and the base
-// directory used to resolve relative `files` sources. It supports a local
+// readProfile resolves a profile location to its raw bytes, the base
+// directory used to resolve relative `files` sources, and (when applicable)
+// the base URL used to resolve them over the network. It supports a local
 // file path, "-" for standard input, and http(s):// URLs, mirroring the
 // input handling of `kubectl apply -f`. For stdin and URLs there is no
 // enclosing directory, so the current working directory is used as the
-// base (falling back to "." if it cannot be determined).
-func readProfile(path string) (data []byte, baseDir string, err error) {
+// base (falling back to "." if it cannot be determined). When the profile is
+// fetched from a URL and OCI_TO_WSL_PROFILE_FOLLOW_URL is enabled, baseURL is
+// returned non-empty so relative `files` sources are downloaded from the same
+// URL instead of the local filesystem.
+func readProfile(path string) (data []byte, baseDir, baseURL string, err error) {
 	switch {
 	case path == "-":
 		data, err = readLimited(os.Stdin)
 		if err != nil {
-			return nil, "", fmt.Errorf("reading profile from stdin: %w", err)
+			return nil, "", "", fmt.Errorf("reading profile from stdin: %w", err)
 		}
-		return data, workingDir(), nil
+		return data, workingDir(), "", nil
 	case isHTTPURL(path):
-		data, err = fetchProfileURL(path)
+		data, err = fetchProfileURL(path, "")
 		if err != nil {
-			return nil, "", err
+			return nil, "", "", err
 		}
-		return data, workingDir(), nil
+		// Only follow relative file sources over the network when the
+		// operator has explicitly opted in; otherwise keep the safe
+		// default of resolving them on the local filesystem.
+		if isFollowProfileURLEnabled() {
+			return data, "", path, nil
+		}
+		return data, workingDir(), "", nil
 	default:
 		data, err = os.ReadFile(path)
 		if err != nil {
-			return nil, "", fmt.Errorf("reading profile %q: %w", path, err)
+			return nil, "", "", fmt.Errorf("reading profile %q: %w", path, err)
 		}
-		return data, filepath.Dir(path), nil
+		return data, filepath.Dir(path), "", nil
 	}
+}
+
+// envFollowProfileURL, when set to a value parseable as true by
+// strconv.ParseBool (e.g. "1", "t", "true", "True", "TRUE"), makes relative
+// `files[].src` entries in a profile that was itself loaded from an
+// http(s):// URL resolve against that profile's URL and be downloaded over
+// the network, instead of being read from the local filesystem. It is
+// opt-in (default off) because fetching files named by a remote document
+// broadens the trust placed in that document.
+const envFollowProfileURL = "OCI_TO_WSL_PROFILE_FOLLOW_URL"
+
+// isFollowProfileURLEnabled reports whether relative profile file sources
+// should be downloaded over the network for URL-loaded profiles. Controlled
+// by the OCI_TO_WSL_PROFILE_FOLLOW_URL environment variable (default false);
+// the value is parsed with strconv.ParseBool.
+func isFollowProfileURLEnabled() bool {
+	v, err := strconv.ParseBool(os.Getenv(envFollowProfileURL))
+	if err != nil {
+		return false
+	}
+	return v
 }
 
 // isHTTPURL reports whether s looks like an http:// or https:// URL. The
@@ -556,22 +607,94 @@ func workingDir() string {
 	return "."
 }
 
-// fetchProfileURL downloads a profile over http(s) and returns its body.
-func fetchProfileURL(url string) ([]byte, error) {
+// fetchProfileURL downloads a profile (or a profile-referenced file) over
+// http(s) and returns its body. When sameHost is non-empty, redirects are
+// restricted to that host, preventing a remote document from bouncing the
+// request to an arbitrary (possibly internal) server.
+func fetchProfileURL(rawURL, sameHost string) ([]byte, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Get(url)
+	if sameHost != "" {
+		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return fmt.Errorf("stopped after 10 redirects")
+			}
+			if !strings.EqualFold(req.URL.Host, sameHost) {
+				return fmt.Errorf("refusing cross-host redirect to %q", req.URL.Host)
+			}
+			return nil
+		}
+	}
+	resp, err := client.Get(rawURL)
 	if err != nil {
-		return nil, fmt.Errorf("fetching profile %q: %w", url, err)
+		return nil, fmt.Errorf("fetching profile %q: %w", rawURL, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("fetching profile %q: unexpected status %s", url, resp.Status)
+		return nil, fmt.Errorf("fetching profile %q: unexpected status %s", rawURL, resp.Status)
 	}
 	data, err := readLimited(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("reading profile %q: %w", url, err)
+		return nil, fmt.Errorf("reading profile %q: %w", rawURL, err)
 	}
 	return data, nil
+}
+
+// fetchProfileFile downloads a profile-referenced file named by a relative
+// `src` against the profile's baseURL and returns it base64-encoded for use
+// as an inline FileEntry body.
+func fetchProfileFile(baseURL, ref string) (string, error) {
+	target, host, err := resolveProfileFileURL(baseURL, ref)
+	if err != nil {
+		return "", err
+	}
+	data, err := fetchProfileURL(target, host)
+	if err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(data), nil
+}
+
+// resolveProfileFileURL resolves a relative profile file reference against the
+// profile's own URL, enforcing that the result stays same-origin (identical
+// scheme and host) and within the directory containing the profile. These
+// constraints keep "follow the network" from being abused as a request
+// forgery primitive (e.g. a remote profile referencing http://169.254.169.254/
+// or ../../ paths on the same host) once the operator has opted in.
+func resolveProfileFileURL(baseURL, ref string) (target, host string, err error) {
+	base, err := url.Parse(baseURL)
+	if err != nil {
+		return "", "", fmt.Errorf("parsing profile URL %q: %w", baseURL, err)
+	}
+	r, err := url.Parse(ref)
+	if err != nil {
+		return "", "", fmt.Errorf("parsing profile file %q: %w", ref, err)
+	}
+	// A reference must be a relative path: carrying its own scheme or host
+	// would let a remote profile pull files from an arbitrary server.
+	if r.Scheme != "" || r.Host != "" {
+		return "", "", fmt.Errorf("profile file %q must be a relative path, not an absolute URL", ref)
+	}
+	resolved := base.ResolveReference(r)
+	if !strings.EqualFold(resolved.Scheme, base.Scheme) || !strings.EqualFold(resolved.Host, base.Host) {
+		return "", "", fmt.Errorf("profile file %q resolves outside the profile's host", ref)
+	}
+	// ResolveReference removes dot segments, but still confine the result to
+	// the profile's own directory so "../" cannot reach unrelated paths.
+	if !urlPathWithin(path.Dir(base.Path), resolved.Path) {
+		return "", "", fmt.Errorf("profile file %q escapes the profile's base directory", ref)
+	}
+	return resolved.String(), base.Host, nil
+}
+
+// urlPathWithin reports whether the cleaned URL path p is baseDir or lives
+// underneath it.
+func urlPathWithin(baseDir, p string) bool {
+	baseDir = path.Clean("/" + strings.Trim(baseDir, "/"))
+	cp := path.Clean("/" + p)
+	if baseDir == "/" {
+		return true
+	}
+	return cp == baseDir || strings.HasPrefix(cp, baseDir+"/")
 }
 
 // NAME must be at least one non-% character to avoid matching a literal "%%".

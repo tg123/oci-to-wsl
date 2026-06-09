@@ -44,6 +44,9 @@ Examples:
   cat ubuntu.yaml | oci-to-wsl --profile -
   oci-to-wsl --profile https://example.com/ubuntu.yaml
 
+  # Also download a URL profile's relative 'files' sources from the same URL
+  OCI_TO_WSL_PROFILE_FOLLOW_URL=1 oci-to-wsl --profile https://example.com/ubuntu.yaml
+
   # Save the rootfs tar for a non-host platform (save-tar mode only)
   OCI_TO_WSL_PLATFORM=linux/arm64 oci-to-wsl --image ubuntu:22.04 --save-tar ubuntu-arm64.tar
 
