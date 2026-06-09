@@ -52,7 +52,9 @@ type CopyEntry struct {
 	// ForceLF, when true, normalises CRLF ("\r\n") line endings to LF
 	// ("\n") in the file body before it is written into the tar. It
 	// applies to inline Data, to a regular-file Src, and to every regular
-	// file under a directory Src; symlinks are never rewritten.
+	// file under a directory Src; symlinks are never rewritten. Files that
+	// look binary (contain a NUL byte) are left untouched so their bytes
+	// are not corrupted.
 	ForceLF bool
 }
 
@@ -296,12 +298,26 @@ func writeRegularFile(tw *tar.Writer, src, tarName string, info os.FileInfo, has
 }
 
 // crlfToLF normalises Windows CRLF ("\r\n") line endings to LF ("\n").
-// A lone CR (old Mac style) or LF is left untouched.
+// A lone CR (old Mac style) or LF is left untouched. Binary content (as
+// detected by isBinary) is returned verbatim so a "\r\n" byte pair that is
+// part of e.g. an image or executable is never rewritten.
 func crlfToLF(data []byte) []byte {
-	if !bytes.Contains(data, []byte("\r\n")) {
+	if !bytes.Contains(data, []byte("\r\n")) || isBinary(data) {
 		return data
 	}
 	return bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
+}
+
+// isBinary reports whether data looks like binary (non-text) content. It
+// uses the same heuristic as git: the presence of a NUL byte within the
+// first 8000 bytes marks the content as binary. This keeps force_lf from
+// corrupting binary files that happen to contain a "\r\n" byte sequence.
+func isBinary(data []byte) bool {
+	const sniffLen = 8000
+	if len(data) > sniffLen {
+		data = data[:sniffLen]
+	}
+	return bytes.IndexByte(data, 0) >= 0
 }
 
 // writeDirTree walks src and emits the directory plus all children under

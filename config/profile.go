@@ -88,8 +88,10 @@ type FileEntry struct {
 	// returns break a "#!/bin/sh\r" shebang or are otherwise unwanted in
 	// the Linux guest. It applies to a host file source, to every regular
 	// file under a directory source, and to inline `content` /
-	// `content_base64` bodies; symlinks are never rewritten. Defaults to
-	// false so binary payloads are left byte-for-byte intact.
+	// `content_base64` bodies; symlinks are never rewritten. Files that
+	// look binary (contain a NUL byte) are skipped even when this is set,
+	// so their bytes are never corrupted. Defaults to false so all
+	// payloads are left byte-for-byte intact.
 	ForceLF bool `yaml:"force_lf,omitempty"`
 }
 

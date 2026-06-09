@@ -49,7 +49,9 @@ install_dir: C:\WSL\my-ubuntu
 # the staged body are normalised to LF ("\n"), which is handy for shell
 # scripts and config files authored on Windows. It applies to a host file
 # source, every regular file under a directory source, and inline
-# 'content'/'content_base64' bodies; symlinks are never rewritten.
+# 'content'/'content_base64' bodies; symlinks are never rewritten. Files
+# that look binary (contain a NUL byte) are skipped so their bytes stay
+# intact.
 files:
   - src: ./scripts/bootstrap.sh
     dst: /usr/local/bin/bootstrap.sh

@@ -474,3 +474,59 @@ func TestInjectCopies_ForceLFDirectoryTree(t *testing.T) {
 		t.Errorf("a.txt body: got %q, want %q", got.body, want)
 	}
 }
+
+func TestInjectCopies_ForceLFSkipsBinaryInlineData(t *testing.T) {
+dir := t.TempDir()
+tarPath := filepath.Join(dir, "rootfs.tar")
+writeEmptyTar(t, tarPath)
+
+// Binary payload containing a NUL byte and a "\r\n" pair that must not
+// be rewritten even though force_lf is set.
+body := []byte{0x00, 0x01, '\r', '\n', 0x02, 0xff}
+if err := wsl.InjectCopies(tarPath, []wsl.CopyEntry{
+{Data: body, Dst: "/opt/blob.bin", ForceLF: true},
+}); err != nil {
+t.Fatalf("InjectCopies: %v", err)
+}
+
+entries := readTar(t, tarPath)
+got, ok := entries["opt/blob.bin"]
+if !ok {
+t.Fatalf("missing opt/blob.bin; have %v", keysOf(entries))
+}
+if !bytes.Equal(got.body, body) {
+t.Errorf("binary body should be unchanged: got %v, want %v", got.body, body)
+}
+if got.hdr.Size != int64(len(body)) {
+t.Errorf("binary size: got %d, want %d", got.hdr.Size, len(body))
+}
+}
+
+func TestInjectCopies_ForceLFSkipsBinarySrcFile(t *testing.T) {
+dir := t.TempDir()
+src := filepath.Join(dir, "blob.bin")
+body := []byte{'a', '\r', '\n', 0x00, 'b', '\r', '\n'}
+if err := os.WriteFile(src, body, 0644); err != nil {
+t.Fatal(err)
+}
+tarPath := filepath.Join(dir, "rootfs.tar")
+writeEmptyTar(t, tarPath)
+
+if err := wsl.InjectCopies(tarPath, []wsl.CopyEntry{
+{Src: src, Dst: "/opt/blob.bin", ForceLF: true},
+}); err != nil {
+t.Fatalf("InjectCopies: %v", err)
+}
+
+entries := readTar(t, tarPath)
+got, ok := entries["opt/blob.bin"]
+if !ok {
+t.Fatalf("missing opt/blob.bin; have %v", keysOf(entries))
+}
+if !bytes.Equal(got.body, body) {
+t.Errorf("binary src body should be unchanged: got %v, want %v", got.body, body)
+}
+if got.hdr.Size != int64(len(body)) {
+t.Errorf("binary src size: got %d, want %d", got.hdr.Size, len(body))
+}
+}

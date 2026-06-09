@@ -127,7 +127,7 @@ files:                           # optional – injected into the rootfs tar so 
   - src: ./scripts/bootstrap.sh  # relative paths resolve to the profile's directory
     dst: /usr/local/bin/bootstrap.sh
     mode: "0755"                 # optional – octal, e.g. "0755" or "777"
-    force_lf: true               # optional – default false; normalise CRLF line endings to LF (e.g. for shell scripts edited on Windows)
+    force_lf: true               # optional – default false; normalise CRLF line endings to LF (e.g. for shell scripts edited on Windows). Binary files (containing NUL bytes) are skipped.
   - src: C:\Users\me\assets      # native Windows paths are accepted
     dst: /opt/assets
     replace: false               # optional – default true; false overlays onto the upstream tree instead of replacing it
