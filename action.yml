@@ -17,7 +17,7 @@ inputs:
     description: 'WSL distribution name to create. Required unless "profile" sets it or "save-tar" is used.'
     required: false
   profile:
-    description: 'Path to a YAML profile file describing the image, files, users, init_cmds, etc. Overrides "image"/"name"/"dir" when set.'
+    description: 'Path to a YAML profile file (or "-" for stdin, or an http(s):// URL) describing the image, files, users, init_cmds, etc. Overrides "image"/"name"/"dir" when set.'
     required: false
   dir:
     description: 'Directory to store the WSL virtual disk (default: .\<name>).'
