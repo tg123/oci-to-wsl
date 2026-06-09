@@ -455,22 +455,29 @@ func TestProfile_Validate(t *testing.T) {	empty := ""
 			wantErr: "decoding content_base64",
 		},
 		{
-			name: "sha1 with src ok",
+			name: "sha1 with remote src ok",
+			profile: config.Profile{Image: "alpine", Files: []config.FileEntry{
+				{Src: "https://example.com/x", Sha1: "da39a3ee5e6b4b0d3255bfef95601890afd80709", Dst: "/x"},
+			}},
+		},
+		{
+			name: "sha1 with local src",
 			profile: config.Profile{Image: "alpine", Files: []config.FileEntry{
 				{Src: "/host/x", Sha1: "da39a3ee5e6b4b0d3255bfef95601890afd80709", Dst: "/x"},
 			}},
+			wantErr: "only valid together with a network URL 'src'",
 		},
 		{
 			name: "sha1 without src",
 			profile: config.Profile{Image: "alpine", Files: []config.FileEntry{
 				{Content: s("hi"), Sha1: "da39a3ee5e6b4b0d3255bfef95601890afd80709", Dst: "/x"},
 			}},
-			wantErr: "only valid together with 'src'",
+			wantErr: "only valid together with a network URL 'src'",
 		},
 		{
 			name: "sha1 malformed",
 			profile: config.Profile{Image: "alpine", Files: []config.FileEntry{
-				{Src: "/host/x", Sha1: "deadbeef", Dst: "/x"},
+				{Src: "https://example.com/x", Sha1: "deadbeef", Dst: "/x"},
 			}},
 			wantErr: "40-character hex digest",
 		},

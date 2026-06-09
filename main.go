@@ -345,8 +345,7 @@ func loadProfile(profile *config.Profile, saveTar string) error {
 // on the entry.
 //
 // A network URL Src (http:// or https://) is downloaded here and staged as
-// inline data. When a Sha1 digest is supplied, the bytes read from Src —
-// whether downloaded from the network or read from a local file — must
+// inline data. When a Sha1 digest is supplied, the downloaded bytes must
 // hash to that digest or staging fails.
 func fileEntryToCopy(f config.FileEntry) (wsl.CopyEntry, error) {
 	switch {
@@ -360,18 +359,6 @@ func fileEntryToCopy(f config.FileEntry) (wsl.CopyEntry, error) {
 				return wsl.CopyEntry{}, fmt.Errorf("profile files: %q: %w", f.Dst, err)
 			}
 			return wsl.CopyEntry{Data: data, Dst: f.Dst, Mode: f.Mode}, nil
-		}
-		// A local Src with a sha1 digest is verified by reading the file
-		// up front; os.ReadFile fails for a directory, which is the
-		// desired behaviour because a directory has no single digest.
-		if f.Sha1 != "" {
-			data, err := os.ReadFile(f.Src) //nolint:gosec
-			if err != nil {
-				return wsl.CopyEntry{}, fmt.Errorf("profile files: %q: reading src %q: %w", f.Dst, f.Src, err)
-			}
-			if err := verifySha1(data, f.Sha1, f.Src); err != nil {
-				return wsl.CopyEntry{}, fmt.Errorf("profile files: %q: %w", f.Dst, err)
-			}
 		}
 		return wsl.CopyEntry{Src: f.Src, Dst: f.Dst, Mode: f.Mode}, nil
 	case f.Content != nil:

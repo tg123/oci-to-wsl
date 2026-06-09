@@ -79,7 +79,7 @@ func TestFileEntryToCopy_RemoteSrcHTTPError(t *testing.T) {
 	}
 }
 
-func TestFileEntryToCopy_LocalSrcWithSha1(t *testing.T) {
+func TestFileEntryToCopy_LocalSrc(t *testing.T) {
 	dir := t.TempDir()
 	body := []byte("local file content\n")
 	p := filepath.Join(dir, "f.txt")
@@ -87,9 +87,9 @@ func TestFileEntryToCopy_LocalSrcWithSha1(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Matching digest keeps Src so directory/symlink/mode semantics in
+	// A local src keeps Src so directory/symlink/mode semantics in
 	// wsl.InjectCopies are preserved.
-	ce, err := fileEntryToCopy(config.FileEntry{Src: p, Dst: "/etc/f", Sha1: sha1Hex(body)})
+	ce, err := fileEntryToCopy(config.FileEntry{Src: p, Dst: "/etc/f"})
 	if err != nil {
 		t.Fatalf("fileEntryToCopy: %v", err)
 	}
@@ -98,12 +98,5 @@ func TestFileEntryToCopy_LocalSrcWithSha1(t *testing.T) {
 	}
 	if ce.Data != nil {
 		t.Errorf("local src should not be inlined, got Data=%q", ce.Data)
-	}
-
-	// Mismatched digest fails.
-	if _, err := fileEntryToCopy(config.FileEntry{Src: p, Dst: "/etc/f", Sha1: "da39a3ee5e6b4b0d3255bfef95601890afd80709"}); err == nil {
-		t.Error("expected sha1 mismatch error")
-	} else if !strings.Contains(err.Error(), "sha1 mismatch") {
-		t.Errorf("error = %v, want sha1 mismatch", err)
 	}
 }

@@ -133,7 +133,7 @@ files:                           # optional – injected into the rootfs tar so 
   - src: https://example.com/tools/installer.sh  # http:// / https:// URLs are downloaded at staging time
     dst: /usr/local/bin/installer.sh
     mode: "0755"
-    sha1: da39a3ee5e6b4b0d3255bfef95601890afd80709  # optional – 40-char hex digest the bytes read from `src` must match
+    sha1: da39a3ee5e6b4b0d3255bfef95601890afd80709  # optional – 40-char hex digest the downloaded bytes must match (network URL src only)
   - src: '%USERPROFILE%\.gitconfig'  # %VAR%, $VAR / ${VAR} and a leading ~ are expanded in `src`
     dst: '/home/%USERNAME%/.gitconfig' # `dst` accepts the same %VAR% / $VAR / ${VAR} expansion as `src`
   - dst: /etc/motd               # inline UTF-8 body in place of 'src'
