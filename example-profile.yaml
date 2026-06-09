@@ -28,15 +28,21 @@ install_dir: C:\WSL\my-ubuntu
 # first boot and visible to init_cmds.
 #
 # Each entry must supply exactly one source of data:
-#   * 'src'            - read from a host file or directory
+#   * 'src'            - read from a host file or directory, OR download from
+#                        an http:// / https:// URL (single file)
 #   * 'content'        - inline UTF-8 file body (single regular file)
 #   * 'content_base64' - inline base64-encoded file body (use for binary)
 #
 # Relative 'src' paths are resolved against the directory containing this
 # profile. Windows %VAR% (e.g. %USERPROFILE%, %APPDATA%), POSIX $VAR /
 # ${VAR} and a leading ~ are expanded in 'src'. Native Windows paths like
-# C:\Users\me\file are accepted. 'dst' must be an absolute POSIX path
-# (start with '/') and supports the same %VAR% / $VAR / ${VAR} host-env
+# C:\Users\me\file are accepted. An http:// or https:// 'src' is downloaded
+# at staging time and written as a single file at 'dst' (only %VAR% / $VAR /
+# ${VAR} are expanded in a URL; it is not resolved against the profile dir).
+# 'sha1' is optional and, when set, must be the 40-character hex SHA-1 digest
+# of the bytes read from 'src' (a host file or a downloaded URL — not a
+# directory); staging fails on a mismatch. 'dst' must be an absolute POSIX
+# path (start with '/') and supports the same %VAR% / $VAR / ${VAR} host-env
 # expansion as 'src' so a single profile can target per-host paths such as
 # /home/%USERNAME%/.config. 'mode' is optional and is baked into the tar
 # header (no chmod step runs inside the distribution); for a directory
@@ -49,6 +55,10 @@ files:
   - src: ./scripts/bootstrap.sh
     dst: /usr/local/bin/bootstrap.sh
     mode: "0755"
+  - src: https://example.com/tools/installer.sh   # downloaded at staging time
+    dst: /usr/local/bin/installer.sh
+    mode: "0755"
+    sha1: da39a3ee5e6b4b0d3255bfef95601890afd80709   # optional integrity check
   - src: C:\Users\me\assets
     dst: /opt/assets
     mode: "0777"
