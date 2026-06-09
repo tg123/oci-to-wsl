@@ -40,8 +40,10 @@ install_dir: C:\WSL\my-ubuntu
 # at staging time and written as a single file at 'dst' (only %VAR% / $VAR /
 # ${VAR} are expanded in a URL; it is not resolved against the profile dir).
 # 'sha1' is optional and, when set, must be the 40-character hex SHA-1 digest
-# of the bytes downloaded from a network URL 'src'; staging fails on a
-# mismatch. It is only valid together with an http:// or https:// 'src'. 'dst' must be an absolute POSIX
+# of the bytes staged from 'src'; staging fails on a mismatch. It applies to
+# any 'src', whether a local path or an http:// / https:// URL, and the
+# comparison is case-insensitive. It is only valid together with a 'src'
+# (not with inline content). 'dst' must be an absolute POSIX
 # path (start with '/') and supports the same %VAR% / $VAR / ${VAR} host-env
 # expansion as 'src' so a single profile can target per-host paths such as
 # /home/%USERNAME%/.config. 'mode' is optional and is baked into the tar

@@ -469,14 +469,13 @@ func TestProfile_Validate(t *testing.T) {
 			profile: config.Profile{Image: "alpine", Files: []config.FileEntry{
 				{Src: "/host/x", Sha1: "da39a3ee5e6b4b0d3255bfef95601890afd80709", Dst: "/x"},
 			}},
-			wantErr: "only valid together with a network URL 'src'",
 		},
 		{
 			name: "sha1 without src",
 			profile: config.Profile{Image: "alpine", Files: []config.FileEntry{
 				{Content: s("hi"), Sha1: "da39a3ee5e6b4b0d3255bfef95601890afd80709", Dst: "/x"},
 			}},
-			wantErr: "only valid together with a network URL 'src'",
+			wantErr: "only valid together with a 'src'",
 		},
 		{
 			name: "sha1 malformed",

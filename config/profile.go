@@ -41,11 +41,13 @@ type FileEntry struct {
 	// expanded.
 	Src string `yaml:"src,omitempty"`
 
-	// Sha1 is an optional lowercase hex SHA-1 digest (40 hex characters)
-	// that the bytes downloaded from a network URL Src must match. It is
-	// only valid together with a remote (http:// or https://) Src. When
-	// set, staging fails if the downloaded content does not hash to this
-	// value. Comparison is case-insensitive.
+	// Sha1 is an optional hex SHA-1 digest (40 hex characters) that the
+	// bytes staged from Src must match. It applies to any Src, whether a
+	// local filesystem path or a network URL (http:// or https://). When
+	// set, staging fails if the file's content does not hash to this
+	// value. Comparison is case-insensitive, so the digest may be given in
+	// upper or lower case. Only valid together with Src (not with inline
+	// Content or ContentBase64).
 	Sha1 string `yaml:"sha1,omitempty"`
 
 	// Content is an inline UTF-8 file body. When set, no host file is
@@ -156,8 +158,8 @@ func (e *FileEntry) Validate() error {
 		e.decodedBase64 = decoded
 	}
 	if e.Sha1 != "" {
-		if !IsRemoteSrc(e.Src) {
-			return fmt.Errorf("%q: 'sha1' is only valid together with a network URL 'src'", e.Dst)
+		if e.Src == "" {
+			return fmt.Errorf("%q: 'sha1' is only valid together with a 'src'", e.Dst)
 		}
 		if !sha1HexRE.MatchString(strings.TrimSpace(e.Sha1)) {
 			return fmt.Errorf("%q: 'sha1' must be a 40-character hex digest", e.Dst)
