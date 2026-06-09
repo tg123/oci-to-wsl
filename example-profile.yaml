@@ -44,11 +44,17 @@ install_dir: C:\WSL\my-ubuntu
 # it defaults to 0644. 'replace' is optional and defaults to true: any
 # existing entry at 'dst' in the upstream rootfs tar is dropped before the
 # file is staged (for a directory 'dst' the whole subtree is removed). Set
-# 'replace: false' to overlay onto the existing tree instead.
+# 'replace: false' to overlay onto the existing tree instead. 'force_lf' is
+# optional and defaults to false: when true, CRLF ("\r\n") line endings in
+# the staged body are normalised to LF ("\n"), which is handy for shell
+# scripts and config files authored on Windows. It applies to a host file
+# source, every regular file under a directory source, and inline
+# 'content'/'content_base64' bodies; symlinks are never rewritten.
 files:
   - src: ./scripts/bootstrap.sh
     dst: /usr/local/bin/bootstrap.sh
     mode: "0755"
+    force_lf: true               # normalise CRLF line endings to LF (e.g. for shell scripts edited on Windows)
   - src: C:\Users\me\assets
     dst: /opt/assets
     mode: "0777"

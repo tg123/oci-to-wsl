@@ -343,11 +343,11 @@ func loadProfile(profile *config.Profile, saveTar string) error {
 func fileEntryToCopy(f config.FileEntry) (wsl.CopyEntry, error) {
 	switch {
 	case f.Src != "":
-		return wsl.CopyEntry{Src: f.Src, Dst: f.Dst, Mode: f.Mode}, nil
+		return wsl.CopyEntry{Src: f.Src, Dst: f.Dst, Mode: f.Mode, ForceLF: f.ForceLF}, nil
 	case f.Content != nil:
-		return wsl.CopyEntry{Data: []byte(*f.Content), Dst: f.Dst, Mode: f.Mode}, nil
+		return wsl.CopyEntry{Data: []byte(*f.Content), Dst: f.Dst, Mode: f.Mode, ForceLF: f.ForceLF}, nil
 	case f.ContentBase64 != nil:
-		return wsl.CopyEntry{Data: f.DecodedContentBase64(), Dst: f.Dst, Mode: f.Mode}, nil
+		return wsl.CopyEntry{Data: f.DecodedContentBase64(), Dst: f.Dst, Mode: f.Mode, ForceLF: f.ForceLF}, nil
 	default:
 		return wsl.CopyEntry{}, fmt.Errorf("profile files: %q: no source set (call Profile.Validate first)", f.Dst)
 	}

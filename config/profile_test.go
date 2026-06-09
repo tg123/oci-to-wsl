@@ -395,6 +395,29 @@ files:
 	}
 }
 
+func TestLoadProfile_FilesForceLF(t *testing.T) {
+	yaml := `
+name: lf-distro
+image: alpine:latest
+files:
+  - dst: /etc/motd
+    content: "hello\n"
+    force_lf: true
+  - dst: /etc/other
+    content: "world\n"
+`
+	p := writeAndLoad(t, yaml)
+	if len(p.Files) != 2 {
+		t.Fatalf("Files length: got %d, want 2", len(p.Files))
+	}
+	if !p.Files[0].ForceLF {
+		t.Errorf("Files[0].ForceLF (explicit true): got false, want true")
+	}
+	if p.Files[1].ForceLF {
+		t.Errorf("Files[1].ForceLF (omitted): got true, want false (default)")
+	}
+}
+
 func TestProfile_Validate(t *testing.T) {
 	empty := ""
 	s := func(v string) *string { return &v }
