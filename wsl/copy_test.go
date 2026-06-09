@@ -476,108 +476,108 @@ func TestInjectCopies_ForceLFDirectoryTree(t *testing.T) {
 }
 
 func TestInjectCopies_ForceLFSkipsBinaryInlineData(t *testing.T) {
-dir := t.TempDir()
-tarPath := filepath.Join(dir, "rootfs.tar")
-writeEmptyTar(t, tarPath)
+	dir := t.TempDir()
+	tarPath := filepath.Join(dir, "rootfs.tar")
+	writeEmptyTar(t, tarPath)
 
-// Binary payload containing a NUL byte and a "\r\n" pair that must not
-// be rewritten even though force_lf is set.
-body := []byte{0x00, 0x01, '\r', '\n', 0x02, 0xff}
-if err := wsl.InjectCopies(tarPath, []wsl.CopyEntry{
-{Data: body, Dst: "/opt/blob.bin", ForceLF: true},
-}); err != nil {
-t.Fatalf("InjectCopies: %v", err)
-}
+	// Binary payload containing a NUL byte and a "\r\n" pair that must not
+	// be rewritten even though force_lf is set.
+	body := []byte{0x00, 0x01, '\r', '\n', 0x02, 0xff}
+	if err := wsl.InjectCopies(tarPath, []wsl.CopyEntry{
+		{Data: body, Dst: "/opt/blob.bin", ForceLF: true},
+	}); err != nil {
+		t.Fatalf("InjectCopies: %v", err)
+	}
 
-entries := readTar(t, tarPath)
-got, ok := entries["opt/blob.bin"]
-if !ok {
-t.Fatalf("missing opt/blob.bin; have %v", keysOf(entries))
-}
-if !bytes.Equal(got.body, body) {
-t.Errorf("binary body should be unchanged: got %v, want %v", got.body, body)
-}
-if got.hdr.Size != int64(len(body)) {
-t.Errorf("binary size: got %d, want %d", got.hdr.Size, len(body))
-}
+	entries := readTar(t, tarPath)
+	got, ok := entries["opt/blob.bin"]
+	if !ok {
+		t.Fatalf("missing opt/blob.bin; have %v", keysOf(entries))
+	}
+	if !bytes.Equal(got.body, body) {
+		t.Errorf("binary body should be unchanged: got %v, want %v", got.body, body)
+	}
+	if got.hdr.Size != int64(len(body)) {
+		t.Errorf("binary size: got %d, want %d", got.hdr.Size, len(body))
+	}
 }
 
 func TestInjectCopies_ForceLFSkipsBinarySrcFile(t *testing.T) {
-dir := t.TempDir()
-src := filepath.Join(dir, "blob.bin")
-body := []byte{'a', '\r', '\n', 0x00, 'b', '\r', '\n'}
-if err := os.WriteFile(src, body, 0644); err != nil {
-t.Fatal(err)
-}
-tarPath := filepath.Join(dir, "rootfs.tar")
-writeEmptyTar(t, tarPath)
+	dir := t.TempDir()
+	src := filepath.Join(dir, "blob.bin")
+	body := []byte{'a', '\r', '\n', 0x00, 'b', '\r', '\n'}
+	if err := os.WriteFile(src, body, 0644); err != nil {
+		t.Fatal(err)
+	}
+	tarPath := filepath.Join(dir, "rootfs.tar")
+	writeEmptyTar(t, tarPath)
 
-if err := wsl.InjectCopies(tarPath, []wsl.CopyEntry{
-{Src: src, Dst: "/opt/blob.bin", ForceLF: true},
-}); err != nil {
-t.Fatalf("InjectCopies: %v", err)
-}
+	if err := wsl.InjectCopies(tarPath, []wsl.CopyEntry{
+		{Src: src, Dst: "/opt/blob.bin", ForceLF: true},
+	}); err != nil {
+		t.Fatalf("InjectCopies: %v", err)
+	}
 
-entries := readTar(t, tarPath)
-got, ok := entries["opt/blob.bin"]
-if !ok {
-t.Fatalf("missing opt/blob.bin; have %v", keysOf(entries))
-}
-if !bytes.Equal(got.body, body) {
-t.Errorf("binary src body should be unchanged: got %v, want %v", got.body, body)
-}
-if got.hdr.Size != int64(len(body)) {
-t.Errorf("binary src size: got %d, want %d", got.hdr.Size, len(body))
-}
+	entries := readTar(t, tarPath)
+	got, ok := entries["opt/blob.bin"]
+	if !ok {
+		t.Fatalf("missing opt/blob.bin; have %v", keysOf(entries))
+	}
+	if !bytes.Equal(got.body, body) {
+		t.Errorf("binary src body should be unchanged: got %v, want %v", got.body, body)
+	}
+	if got.hdr.Size != int64(len(body)) {
+		t.Errorf("binary src size: got %d, want %d", got.hdr.Size, len(body))
+	}
 }
 
 func TestInjectCopies_ForceLFDirectoryTreeMixedBinary(t *testing.T) {
-dir := t.TempDir()
-srcDir := filepath.Join(dir, "tree")
-if err := os.MkdirAll(filepath.Join(srcDir, "sub"), 0755); err != nil {
-t.Fatal(err)
-}
-// Two text files (one at the root, one nested) plus a binary file: all
-// text files under the directory must be normalised, the binary left intact.
-if err := os.WriteFile(filepath.Join(srcDir, "a.txt"), []byte("x\r\ny\r\n"), 0644); err != nil {
-t.Fatal(err)
-}
-if err := os.WriteFile(filepath.Join(srcDir, "sub", "b.txt"), []byte("p\r\nq\r\n"), 0644); err != nil {
-t.Fatal(err)
-}
-binBody := []byte{'m', '\r', '\n', 0x00, 'n', '\r', '\n'}
-if err := os.WriteFile(filepath.Join(srcDir, "data.bin"), binBody, 0644); err != nil {
-t.Fatal(err)
-}
-tarPath := filepath.Join(dir, "rootfs.tar")
-writeEmptyTar(t, tarPath)
+	dir := t.TempDir()
+	srcDir := filepath.Join(dir, "tree")
+	if err := os.MkdirAll(filepath.Join(srcDir, "sub"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	// Two text files (one at the root, one nested) plus a binary file: all
+	// text files under the directory must be normalised, the binary left intact.
+	if err := os.WriteFile(filepath.Join(srcDir, "a.txt"), []byte("x\r\ny\r\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "sub", "b.txt"), []byte("p\r\nq\r\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	binBody := []byte{'m', '\r', '\n', 0x00, 'n', '\r', '\n'}
+	if err := os.WriteFile(filepath.Join(srcDir, "data.bin"), binBody, 0644); err != nil {
+		t.Fatal(err)
+	}
+	tarPath := filepath.Join(dir, "rootfs.tar")
+	writeEmptyTar(t, tarPath)
 
-if err := wsl.InjectCopies(tarPath, []wsl.CopyEntry{
-{Src: srcDir, Dst: "/opt/tree", ForceLF: true},
-}); err != nil {
-t.Fatalf("InjectCopies: %v", err)
-}
+	if err := wsl.InjectCopies(tarPath, []wsl.CopyEntry{
+		{Src: srcDir, Dst: "/opt/tree", ForceLF: true},
+	}); err != nil {
+		t.Fatalf("InjectCopies: %v", err)
+	}
 
-entries := readTar(t, tarPath)
+	entries := readTar(t, tarPath)
 
-for name, want := range map[string]string{
-"opt/tree/a.txt":     "x\ny\n",
-"opt/tree/sub/b.txt": "p\nq\n",
-} {
-got, ok := entries[name]
-if !ok {
-t.Fatalf("missing %s; have %v", name, keysOf(entries))
-}
-if string(got.body) != want {
-t.Errorf("%s body: got %q, want %q", name, got.body, want)
-}
-}
+	for name, want := range map[string]string{
+		"opt/tree/a.txt":     "x\ny\n",
+		"opt/tree/sub/b.txt": "p\nq\n",
+	} {
+		got, ok := entries[name]
+		if !ok {
+			t.Fatalf("missing %s; have %v", name, keysOf(entries))
+		}
+		if string(got.body) != want {
+			t.Errorf("%s body: got %q, want %q", name, got.body, want)
+		}
+	}
 
-gotBin, ok := entries["opt/tree/data.bin"]
-if !ok {
-t.Fatalf("missing opt/tree/data.bin; have %v", keysOf(entries))
-}
-if !bytes.Equal(gotBin.body, binBody) {
-t.Errorf("data.bin body should be unchanged: got %v, want %v", gotBin.body, binBody)
-}
+	gotBin, ok := entries["opt/tree/data.bin"]
+	if !ok {
+		t.Fatalf("missing opt/tree/data.bin; have %v", keysOf(entries))
+	}
+	if !bytes.Equal(gotBin.body, binBody) {
+		t.Errorf("data.bin body should be unchanged: got %v, want %v", gotBin.body, binBody)
+	}
 }

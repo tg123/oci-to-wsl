@@ -302,7 +302,7 @@ func writeRegularFile(tw *tar.Writer, src, tarName string, info os.FileInfo, has
 // detected by isBinary) is returned verbatim so a "\r\n" byte pair that is
 // part of e.g. an image or executable is never rewritten.
 func crlfToLF(data []byte) []byte {
-	if !bytes.Contains(data, []byte("\r\n")) || isBinary(data) {
+	if isBinary(data) || !bytes.Contains(data, []byte("\r\n")) {
 		return data
 	}
 	return bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
