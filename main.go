@@ -40,6 +40,13 @@ Examples:
   # Use a YAML profile
   oci-to-wsl --profile ubuntu.yaml
 
+  # Read a YAML profile from stdin or fetch it over the network
+  cat ubuntu.yaml | oci-to-wsl --profile -
+  oci-to-wsl --profile https://example.com/ubuntu.yaml
+
+  # Also download a URL profile's relative 'files' sources from the same URL
+  OCI_TO_WSL_PROFILE_FOLLOW_URL=1 oci-to-wsl --profile https://example.com/ubuntu.yaml
+
   # Save the rootfs tar for a non-host platform (save-tar mode only)
   OCI_TO_WSL_PLATFORM=linux/arm64 oci-to-wsl --image ubuntu:22.04 --save-tar ubuntu-arm64.tar
 
@@ -51,7 +58,7 @@ Examples:
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:  "profile",
-				Usage: "path to a YAML profile file (overrides other flags when set)",
+				Usage: "path to a YAML profile file, '-' for stdin, or an http(s):// URL (overrides other flags when set)",
 			},
 			&cli.StringFlag{
 				Name:  "image",
