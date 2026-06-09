@@ -531,7 +531,7 @@ func readProfile(path string) (data []byte, baseDir, baseURL string, err error) 
 		}
 		return data, workingDir(), "", nil
 	case isHTTPURL(path):
-		data, err = fetchProfileURL(path, "")
+		data, err = fetchProfileURL(path, "", "")
 		if err != nil {
 			return nil, "", "", err
 		}
@@ -609,14 +609,17 @@ func workingDir() string {
 
 // fetchProfileURL downloads a profile (or a profile-referenced file) over
 // http(s) and returns its body. When sameHost is non-empty, redirects are
-// restricted to that host, preventing a remote document from bouncing the
-// request to an arbitrary (possibly internal) server.
-func fetchProfileURL(rawURL, sameHost string) ([]byte, error) {
+// restricted to that scheme+host pair, preventing a remote document from
+// bouncing the request to an arbitrary (possibly internal) server.
+func fetchProfileURL(rawURL, sameScheme, sameHost string) ([]byte, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	if sameHost != "" {
 		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
 				return fmt.Errorf("stopped after 10 redirects")
+			}
+			if !strings.EqualFold(req.URL.Scheme, sameScheme) {
+				return fmt.Errorf("refusing cross-scheme redirect to %q", req.URL.Scheme)
 			}
 			if !strings.EqualFold(req.URL.Host, sameHost) {
 				return fmt.Errorf("refusing cross-host redirect to %q", req.URL.Host)
@@ -643,11 +646,11 @@ func fetchProfileURL(rawURL, sameHost string) ([]byte, error) {
 // `src` against the profile's baseURL and returns it base64-encoded for use
 // as an inline FileEntry body.
 func fetchProfileFile(baseURL, ref string) (string, error) {
-	target, host, err := resolveProfileFileURL(baseURL, ref)
+	target, scheme, host, err := resolveProfileFileURL(baseURL, ref)
 	if err != nil {
 		return "", err
 	}
-	data, err := fetchProfileURL(target, host)
+	data, err := fetchProfileURL(target, scheme, host)
 	if err != nil {
 		return "", err
 	}
@@ -660,30 +663,30 @@ func fetchProfileFile(baseURL, ref string) (string, error) {
 // constraints keep "follow the network" from being abused as a request
 // forgery primitive (e.g. a remote profile referencing http://169.254.169.254/
 // or ../../ paths on the same host) once the operator has opted in.
-func resolveProfileFileURL(baseURL, ref string) (target, host string, err error) {
+func resolveProfileFileURL(baseURL, ref string) (target, scheme, host string, err error) {
 	base, err := url.Parse(baseURL)
 	if err != nil {
-		return "", "", fmt.Errorf("parsing profile URL %q: %w", baseURL, err)
+		return "", "", "", fmt.Errorf("parsing profile URL %q: %w", baseURL, err)
 	}
 	r, err := url.Parse(ref)
 	if err != nil {
-		return "", "", fmt.Errorf("parsing profile file %q: %w", ref, err)
+		return "", "", "", fmt.Errorf("parsing profile file %q: %w", ref, err)
 	}
 	// A reference must be a relative path: carrying its own scheme or host
 	// would let a remote profile pull files from an arbitrary server.
 	if r.Scheme != "" || r.Host != "" {
-		return "", "", fmt.Errorf("profile file %q must be a relative path, not an absolute URL", ref)
+		return "", "", "", fmt.Errorf("profile file %q must be a relative path, not an absolute URL", ref)
 	}
 	resolved := base.ResolveReference(r)
 	if !strings.EqualFold(resolved.Scheme, base.Scheme) || !strings.EqualFold(resolved.Host, base.Host) {
-		return "", "", fmt.Errorf("profile file %q resolves outside the profile's host", ref)
+		return "", "", "", fmt.Errorf("profile file %q resolves outside the profile's host", ref)
 	}
 	// ResolveReference removes dot segments, but still confine the result to
 	// the profile's own directory so "../" cannot reach unrelated paths.
 	if !urlPathWithin(path.Dir(base.Path), resolved.Path) {
-		return "", "", fmt.Errorf("profile file %q escapes the profile's base directory", ref)
+		return "", "", "", fmt.Errorf("profile file %q escapes the profile's base directory", ref)
 	}
-	return resolved.String(), base.Host, nil
+	return resolved.String(), base.Scheme, base.Host, nil
 }
 
 // urlPathWithin reports whether the cleaned URL path p is baseDir or lives

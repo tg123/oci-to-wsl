@@ -678,6 +678,27 @@ func TestLoadProfile_FromURLRejectsParentEscape(t *testing.T) {
 	}
 }
 
+func TestLoadProfile_FromURLRejectsCrossSchemeRedirect(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/dir/profile.yaml", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "name: url-distro\nimage: alpine:latest\nfiles:\n  - src: ./bootstrap.sh\n    dst: /opt/bootstrap.sh\n")
+	})
+	mux.HandleFunc("/dir/bootstrap.sh", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "https://"+r.Host+"/dir/bootstrap-https.sh", http.StatusFound)
+	})
+
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	t.Setenv("OCI_TO_WSL_PROFILE_FOLLOW_URL", "1")
+
+	if _, err := config.LoadProfile(srv.URL + "/dir/profile.yaml"); err == nil {
+		t.Fatal("expected error for cross-scheme redirect, got nil")
+	} else if !strings.Contains(err.Error(), "cross-scheme redirect") {
+		t.Fatalf("error = %v, want cross-scheme redirect", err)
+	}
+}
+
 func writeAndLoad(t *testing.T, yamlContent string) *config.Profile {
 	t.Helper()
 	dir := t.TempDir()

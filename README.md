@@ -36,7 +36,7 @@ cat ubuntu.yaml | oci-to-wsl.exe --profile -
 oci-to-wsl.exe --profile https://example.com/ubuntu.yaml
 
 # Opt in to also downloading the profile's relative `files` sources from the
-# same URL (off by default; see the environment variables table)
+# same URL (off by default; see the YAML profile section below)
 $env:OCI_TO_WSL_PROFILE_FOLLOW_URL=1; oci-to-wsl.exe --profile https://example.com/ubuntu.yaml
 ```
 
@@ -252,7 +252,7 @@ jobs:
 |---|---|
 | `image` | OCI image reference to import (ignored when `profile` is set) |
 | `name` | WSL distribution name (required unless the profile sets it or `save-tar` is used) |
-| `profile` | Path to a YAML profile file; overrides `image`/`name`/`dir` when set |
+| `profile` | Path to a YAML profile file (or `-` for stdin / `http(s)://` URL); overrides `image`/`name`/`dir` when set |
 | `dir` | Directory to store the WSL virtual disk (default: `.\<name>`) |
 | `save-tar` | Write the rootfs tar to this path and skip `wsl --import` |
 | `loglevel` | Logging verbosity: `debug`, `info` (default), `warn`, or `error` |
