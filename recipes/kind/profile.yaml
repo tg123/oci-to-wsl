@@ -1,0 +1,40 @@
+# Recipe: kind — a single-node Kubernetes control plane running natively in WSL2.
+#
+# Unlike the usual "kind in Docker" flow, the kindest/node image is booted
+# directly by WSL's systemd, so no Docker daemon or nested containers are
+# needed on the Windows host. A bootstrap script (staged from this profile's
+# directory) reproduces what kind's container entrypoint normally does and runs
+# `kubeadm init` in place.
+#
+# Launch (helper script is fetched from the same URL as this profile):
+#   $env:OCI_TO_WSL_PROFILE_FOLLOW_URL = '1'
+#   oci-to-wsl.exe --profile https://raw.githubusercontent.com/tg123/oci-to-wsl/main/recipes/kind/profile.yaml
+#
+# When run from a local clone, just point --profile at this file.
+name: kind
+image: kindest/node:v1.32.2
+
+# Store the virtual disk under .\kind by default; override with install_dir if
+# you prefer a fixed location, e.g. '%USERPROFILE%\WSL\kind'.
+# install_dir: '%USERPROFILE%\WSL\kind'
+
+# kindest/node expects an init system; WSL boots systemd when configured.
+wsl_conf:
+  mode: merge
+  content: |
+    [boot]
+    systemd=true
+
+# Stage the bootstrap script that turns the imported rootfs into a running
+# single-node control plane. The relative path resolves to this profile's
+# directory (over a URL, set OCI_TO_WSL_PROFILE_FOLLOW_URL=1 to fetch it).
+files:
+  - src: ./bootstrap-kind.sh
+    dst: /usr/local/bin/bootstrap-kind.sh
+    mode: "0755"
+
+# Bring up the control plane after import. systemd is already PID 1 by the time
+# init_cmds run, so the bootstrap can drive systemctl/kubeadm directly.
+init_cmds:
+  - /usr/local/bin/bootstrap-kind.sh
+  - 'echo "kind is ready. Inside WSL: export KUBECONFIG=/etc/kubernetes/admin.conf && kubectl get nodes"'

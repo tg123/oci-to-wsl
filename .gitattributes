@@ -1,0 +1,4 @@
+# Recipe shell scripts are staged into a Linux rootfs and executed inside WSL.
+# Keep them LF-only even when checked out on Windows; a CRLF turns
+# `set -euo pipefail` into `pipefail\r` (an invalid option) inside the distro.
+*.sh text eol=lf
