@@ -515,10 +515,12 @@ files:
     sha1: da39a3ee5e6b4b0d3255bfef95601890afd80709
   - src: HTTP://example.com/x
     dst: /tmp/x
+  - src: "  https://example.com/y  "
+    dst: /tmp/y
 `
 	p := writeAndLoad(t, yaml)
-	if len(p.Files) != 2 {
-		t.Fatalf("Files length: got %d, want 2", len(p.Files))
+	if len(p.Files) != 3 {
+		t.Fatalf("Files length: got %d, want 3", len(p.Files))
 	}
 	// %VAR% is expanded, but the URL is otherwise left intact (not joined
 	// against the profile directory).
@@ -532,6 +534,11 @@ files:
 	// Scheme detection is case-insensitive.
 	if p.Files[1].Src != "HTTP://example.com/x" {
 		t.Errorf("Files[1].Src: got %q, want unchanged URL", p.Files[1].Src)
+	}
+	// Surrounding whitespace is trimmed so detection and staging stay
+	// consistent (a URL with spaces would otherwise fail at fetch time).
+	if p.Files[2].Src != "https://example.com/y" {
+		t.Errorf("Files[2].Src: got %q, want trimmed URL", p.Files[2].Src)
 	}
 }
 
