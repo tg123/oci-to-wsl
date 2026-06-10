@@ -359,24 +359,32 @@ func loadProfile(profile *config.Profile, saveTar string) error {
 func fileEntryToCopy(f config.FileEntry) (wsl.CopyEntry, error) {
 	switch {
 	case f.Src != "":
-		if config.IsRemoteSrc(f.Src) {
-			data, err := fetchRemoteSrc(f.Src)
+		remote := config.IsRemoteSrc(f.Src)
+		// Read the bytes when we need them: always for a remote src (the
+		// downloaded body is staged inline), or for a local src that carries
+		// a Sha1 digest to verify. A local src without a digest keeps its
+		// Src copy semantics (directory/symlink/mode preserved) and is never
+		// read here.
+		var data []byte
+		switch {
+		case remote:
+			d, err := fetchRemoteSrc(f.Src)
 			if err != nil {
 				return wsl.CopyEntry{}, fmt.Errorf("profile files: %q: downloading src %q: %w", f.Dst, f.Src, err)
 			}
-			if err := verifySha1(data, f.Sha1, f.Src); err != nil {
-				return wsl.CopyEntry{}, fmt.Errorf("profile files: %q: %w", f.Dst, err)
-			}
-			return wsl.CopyEntry{Data: data, Dst: f.Dst, Mode: f.Mode}, nil
-		}
-		if f.Sha1 != "" {
-			data, err := os.ReadFile(f.Src)
+			data = d
+		case f.Sha1 != "":
+			d, err := os.ReadFile(f.Src)
 			if err != nil {
 				return wsl.CopyEntry{}, fmt.Errorf("profile files: %q: reading src %q: %w", f.Dst, f.Src, err)
 			}
-			if err := verifySha1(data, f.Sha1, f.Src); err != nil {
-				return wsl.CopyEntry{}, fmt.Errorf("profile files: %q: %w", f.Dst, err)
-			}
+			data = d
+		}
+		if err := verifySha1(data, f.Sha1, f.Src); err != nil {
+			return wsl.CopyEntry{}, fmt.Errorf("profile files: %q: %w", f.Dst, err)
+		}
+		if remote {
+			return wsl.CopyEntry{Data: data, Dst: f.Dst, Mode: f.Mode}, nil
 		}
 		return wsl.CopyEntry{Src: f.Src, Dst: f.Dst, Mode: f.Mode}, nil
 	case f.Content != nil:
