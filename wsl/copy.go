@@ -269,6 +269,9 @@ func writeRegularFile(tw *tar.Writer, src, tarName string, info os.FileInfo, has
 	}
 
 	if forceLF {
+		// Stream once to decide whether normalisation is needed, then keep the
+		// plain streaming path for binary/no-CRLF files so large files are not
+		// buffered unless we must rewrite their bytes.
 		f, err := os.Open(src) //nolint:gosec
 		if err != nil {
 			return err
@@ -325,6 +328,8 @@ func writeRegularFileFromReader(tw *tar.Writer, tarName string, mode, size int64
 
 func shouldNormalizeCRLF(r io.Reader) (bool, error) {
 	const (
+		// Keep the binary sniff length aligned with Git's heuristic:
+		// https://github.com/git/git/blob/master/xdiff-interface.c#L198-L204
 		sniffLen  = 8000
 		chunkSize = 32 * 1024
 	)
@@ -383,6 +388,8 @@ func crlfToLF(data []byte) []byte {
 // uses the same heuristic as git: the presence of a NUL byte within the
 // first 8000 bytes marks the content as binary. This keeps force_lf from
 // corrupting binary files that happen to contain a "\r\n" byte sequence.
+// Reference:
+// https://github.com/git/git/blob/master/xdiff-interface.c#L198-L204
 func isBinary(data []byte) bool {
 	const sniffLen = 8000
 	if len(data) > sniffLen {
