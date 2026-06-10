@@ -258,10 +258,8 @@ func writeParentDirs(tw *tar.Writer, dst string, addedDirs map[string]struct{}) 
 }
 
 // writeRegularFile emits a single regular-file entry at tarName. When
-// forceLF is true the file body has CRLF line endings normalised to LF
-// before it is written, which means the whole file must be read into
-// memory so the (possibly smaller) tar header Size can be computed up
-// front.
+// forceLF is true and CRLF normalisation is needed, content is rewritten
+// through a temporary file so large files are not buffered in memory.
 func writeRegularFile(tw *tar.Writer, src, tarName string, info os.FileInfo, hasMode bool, modeOverride int64, forceLF bool) error {
 	mode := int64(info.Mode().Perm())
 	if hasMode {
@@ -293,12 +291,21 @@ func writeRegularFile(tw *tar.Writer, src, tarName string, info os.FileInfo, has
 		if _, err := f.Seek(0, io.SeekStart); err != nil {
 			return err
 		}
-		data, err := io.ReadAll(f)
+		tmp, normalizedSize, err := rewriteCRLFToTemp(f)
 		if err != nil {
 			return err
 		}
+		defer func() {
+			_ = os.Remove(tmp.Name())
+		}()
+		defer func() {
+			_ = tmp.Close()
+		}()
 
-		return writeInlineFileModTime(tw, tarName, crlfToLF(data), mode, info.ModTime())
+		if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+			return err
+		}
+		return writeRegularFileFromReader(tw, tarName, mode, normalizedSize, info.ModTime(), tmp)
 	}
 
 	f, err := os.Open(src) //nolint:gosec
@@ -307,6 +314,116 @@ func writeRegularFile(tw *tar.Writer, src, tarName string, info os.FileInfo, has
 	}
 	defer func() { _ = f.Close() }()
 	return writeRegularFileFromReader(tw, tarName, mode, info.Size(), info.ModTime(), f)
+}
+
+func rewriteCRLFToTemp(r io.Reader) (*os.File, int64, error) {
+	tmp, err := os.CreateTemp("", "oci-to-wsl-force-lf-*")
+	if err != nil {
+		return nil, 0, err
+	}
+
+	size, err := copyCRLFToLF(tmp, r)
+	if err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmp.Name())
+		return nil, 0, err
+	}
+
+	return tmp, size, nil
+}
+
+func copyCRLFToLF(w io.Writer, r io.Reader) (int64, error) {
+	const chunkSize = 32 * 1024
+
+	buf := make([]byte, chunkSize)
+	var total int64
+	prevCR := false
+
+	writeBytes := func(p []byte) error {
+		if len(p) == 0 {
+			return nil
+		}
+		n, err := w.Write(p)
+		total += int64(n)
+		if err != nil {
+			return err
+		}
+		if n != len(p) {
+			return io.ErrShortWrite
+		}
+		return nil
+	}
+
+	for {
+		n, err := r.Read(buf)
+		if n > 0 {
+			chunk := buf[:n]
+			start := 0
+
+			if prevCR {
+				if chunk[0] == '\n' {
+					if werr := writeBytes([]byte{'\n'}); werr != nil {
+						return total, werr
+					}
+					start = 1
+				} else {
+					if werr := writeBytes([]byte{'\r'}); werr != nil {
+						return total, werr
+					}
+				}
+				prevCR = false
+			}
+
+			if start >= len(chunk) {
+				continue
+			}
+
+			last := start
+			for i := start; i < len(chunk); i++ {
+				if chunk[i] != '\r' {
+					continue
+				}
+
+				if i+1 < len(chunk) {
+					if chunk[i+1] != '\n' {
+						continue
+					}
+
+					if werr := writeBytes(chunk[last:i]); werr != nil {
+						return total, werr
+					}
+					if werr := writeBytes([]byte{'\n'}); werr != nil {
+						return total, werr
+					}
+					i++
+					last = i + 1
+					continue
+				}
+
+				if werr := writeBytes(chunk[last:i]); werr != nil {
+					return total, werr
+				}
+				prevCR = true
+				last = i + 1
+			}
+
+			if werr := writeBytes(chunk[last:]); werr != nil {
+				return total, werr
+			}
+		}
+
+		if err == io.EOF {
+			if prevCR {
+				if werr := writeBytes([]byte{'\r'}); werr != nil {
+					return total, werr
+				}
+			}
+			return total, nil
+		}
+		if err != nil {
+			return total, err
+		}
+	}
 }
 
 func writeRegularFileFromReader(tw *tar.Writer, tarName string, mode, size int64, modTime time.Time, r io.Reader) error {
