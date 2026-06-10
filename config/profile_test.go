@@ -481,6 +481,32 @@ func TestProfile_Validate(t *testing.T) {
 			}},
 			wantErr: "decoding content_base64",
 		},
+		{
+			name: "sha1 with remote src ok",
+			profile: config.Profile{Image: "alpine", Files: []config.FileEntry{
+				{Src: "https://example.com/x", Sha1: "da39a3ee5e6b4b0d3255bfef95601890afd80709", Dst: "/x"},
+			}},
+		},
+		{
+			name: "sha1 with local src",
+			profile: config.Profile{Image: "alpine", Files: []config.FileEntry{
+				{Src: "/host/x", Sha1: "da39a3ee5e6b4b0d3255bfef95601890afd80709", Dst: "/x"},
+			}},
+		},
+		{
+			name: "sha1 without src",
+			profile: config.Profile{Image: "alpine", Files: []config.FileEntry{
+				{Content: s("hi"), Sha1: "da39a3ee5e6b4b0d3255bfef95601890afd80709", Dst: "/x"},
+			}},
+			wantErr: "only valid together with a 'src'",
+		},
+		{
+			name: "sha1 malformed",
+			profile: config.Profile{Image: "alpine", Files: []config.FileEntry{
+				{Src: "https://example.com/x", Sha1: "deadbeef", Dst: "/x"},
+			}},
+			wantErr: "40-character hex digest",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -498,6 +524,62 @@ func TestProfile_Validate(t *testing.T) {
 				t.Fatalf("error %q does not contain %q", err.Error(), tc.wantErr)
 			}
 		})
+	}
+}
+
+func TestLoadProfile_RemoteSrcNotResolvedAsPath(t *testing.T) {
+	t.Setenv("OCI_TO_WSL_TEST_HOST", "downloads.example.com")
+	yaml := `
+name: remote-distro
+image: alpine:latest
+files:
+  - src: https://%OCI_TO_WSL_TEST_HOST%/tools/installer.sh
+    dst: /usr/local/bin/installer.sh
+    sha1: da39a3ee5e6b4b0d3255bfef95601890afd80709
+  - src: HTTP://example.com/x
+    dst: /tmp/x
+  - src: "  https://example.com/y  "
+    dst: /tmp/y
+`
+	p := writeAndLoad(t, yaml)
+	if len(p.Files) != 3 {
+		t.Fatalf("Files length: got %d, want 3", len(p.Files))
+	}
+	// %VAR% is expanded, but the URL is otherwise left intact (not joined
+	// against the profile directory).
+	want0 := "https://downloads.example.com/tools/installer.sh"
+	if p.Files[0].Src != want0 {
+		t.Errorf("Files[0].Src: got %q, want %q", p.Files[0].Src, want0)
+	}
+	if p.Files[0].Sha1 != "da39a3ee5e6b4b0d3255bfef95601890afd80709" {
+		t.Errorf("Files[0].Sha1: got %q", p.Files[0].Sha1)
+	}
+	// Scheme detection is case-insensitive.
+	if p.Files[1].Src != "HTTP://example.com/x" {
+		t.Errorf("Files[1].Src: got %q, want unchanged URL", p.Files[1].Src)
+	}
+	// Surrounding whitespace is trimmed so detection and staging stay
+	// consistent (a URL with spaces would otherwise fail at fetch time).
+	if p.Files[2].Src != "https://example.com/y" {
+		t.Errorf("Files[2].Src: got %q, want trimmed URL", p.Files[2].Src)
+	}
+}
+
+func TestIsRemoteSrc(t *testing.T) {
+	cases := map[string]bool{
+		"http://example.com/x":  true,
+		"https://example.com/x": true,
+		"HTTPS://EXAMPLE/x":     true,
+		"  http://x ":           true,
+		"/host/path":            false,
+		`C:\Users\me\file`:      false,
+		"ftp://example.com/x":   false,
+		"":                      false,
+	}
+	for in, want := range cases {
+		if got := config.IsRemoteSrc(in); got != want {
+			t.Errorf("IsRemoteSrc(%q): got %v, want %v", in, got, want)
+		}
 	}
 }
 
@@ -746,6 +828,7 @@ func TestLoadProfile_FromStdinHonorsMaxProfileSizeEnv(t *testing.T) {
 	}
 }
 
+// writeAndLoad writes yaml content to a temp file and calls LoadProfile.
 func writeAndLoad(t *testing.T, yamlContent string) *config.Profile {
 	t.Helper()
 	dir := t.TempDir()

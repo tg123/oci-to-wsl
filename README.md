@@ -138,9 +138,14 @@ files:                           # optional – injected into the rootfs tar so 
     dst: /usr/local/bin/bootstrap.sh
     mode: "0755"                 # optional – octal, e.g. "0755" or "777"
     force_lf: true               # optional – default false; normalise CRLF line endings to LF (e.g. for shell scripts edited on Windows). Binary files (containing NUL bytes) are skipped.
+    sha1: da39a3ee5e6b4b0d3255bfef95601890afd80709  # optional – 40-char hex digest the staged bytes must match (any src)
   - src: C:\Users\me\assets      # native Windows paths are accepted
     dst: /opt/assets
     replace: false               # optional – default true; false overlays onto the upstream tree instead of replacing it
+  - src: https://example.com/tools/installer.sh  # http:// / https:// URLs are downloaded at staging time
+    dst: /usr/local/bin/installer.sh
+    mode: "0755"
+    sha1: da39a3ee5e6b4b0d3255bfef95601890afd80709  # optional – 40-char hex digest the staged bytes must match (any src)
   - src: '%USERPROFILE%\.gitconfig'  # %VAR%, $VAR / ${VAR} and a leading ~ are expanded in `src`
     dst: '/home/%USERNAME%/.gitconfig' # `dst` accepts the same %VAR% / $VAR / ${VAR} expansion as `src`
   - dst: /etc/motd               # inline UTF-8 body in place of 'src'

@@ -3,13 +3,17 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/urfave/cli/v3"
 	"golang.org/x/term"
@@ -347,9 +351,41 @@ func loadProfile(profile *config.Profile, saveTar string) error {
 // Profile.Validate() (or FileEntry.Validate()) first, so well-formedness
 // is assumed and any base64 payload has already been decoded and cached
 // on the entry.
+//
+// A network URL Src (http:// or https://) is downloaded here and staged as
+// inline data. When a Sha1 digest is supplied, the bytes staged from Src
+// (local file or downloaded body) must hash to that digest or staging
+// fails.
 func fileEntryToCopy(f config.FileEntry) (wsl.CopyEntry, error) {
 	switch {
 	case f.Src != "":
+		remote := config.IsRemoteSrc(f.Src)
+		// Read the bytes when we need them: always for a remote src (the
+		// downloaded body is staged inline), or for a local src that carries
+		// a Sha1 digest to verify. A local src without a digest keeps its
+		// Src copy semantics (directory/symlink/mode preserved) and is never
+		// read here.
+		var data []byte
+		switch {
+		case remote:
+			d, err := fetchRemoteSrc(f.Src)
+			if err != nil {
+				return wsl.CopyEntry{}, fmt.Errorf("profile files: %q: downloading src %q: %w", f.Dst, f.Src, err)
+			}
+			data = d
+		case f.Sha1 != "":
+			d, err := os.ReadFile(f.Src)
+			if err != nil {
+				return wsl.CopyEntry{}, fmt.Errorf("profile files: %q: reading src %q: %w", f.Dst, f.Src, err)
+			}
+			data = d
+		}
+		if err := verifySha1(data, f.Sha1, f.Src); err != nil {
+			return wsl.CopyEntry{}, fmt.Errorf("profile files: %q: %w", f.Dst, err)
+		}
+		if remote {
+			return wsl.CopyEntry{Data: data, Dst: f.Dst, Mode: f.Mode, ForceLF: f.ForceLF}, nil
+		}
 		return wsl.CopyEntry{Src: f.Src, Dst: f.Dst, Mode: f.Mode, ForceLF: f.ForceLF}, nil
 	case f.Content != nil:
 		return wsl.CopyEntry{Data: []byte(*f.Content), Dst: f.Dst, Mode: f.Mode, ForceLF: f.ForceLF}, nil
@@ -358,6 +394,51 @@ func fileEntryToCopy(f config.FileEntry) (wsl.CopyEntry, error) {
 	default:
 		return wsl.CopyEntry{}, fmt.Errorf("profile files: %q: no source set (call Profile.Validate first)", f.Dst)
 	}
+}
+
+// remoteSrcTimeout bounds how long staging waits on a single remote `src`
+// download so a slow or stalled server cannot hang staging indefinitely.
+const remoteSrcTimeout = 30 * time.Second
+
+// fetchRemoteSrc downloads an http:// or https:// URL and returns its body.
+// A non-2xx response is treated as an error so a stray HTML error page is
+// not silently staged into the distribution. A bounded timeout ensures a
+// slow or stalled server cannot hang staging indefinitely.
+func fetchRemoteSrc(url string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), remoteSrcTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("unexpected HTTP status %s", resp.Status)
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+// verifySha1 checks that data hashes to the expected lowercase/uppercase
+// hex SHA-1 digest. An empty want is treated as "no check requested" and
+// always succeeds. source is used only for the error message.
+func verifySha1(data []byte, want, source string) error {
+	if want == "" {
+		return nil
+	}
+	sum := sha1.Sum(data) //nolint:gosec // SHA-1 is requested explicitly by the profile.
+	got := hex.EncodeToString(sum[:])
+	if !strings.EqualFold(got, strings.TrimSpace(want)) {
+		return fmt.Errorf("sha1 mismatch for src %q: got %s, want %s", source, got, strings.ToLower(strings.TrimSpace(want)))
+	}
+	return nil
 }
 
 // envDisableTarMods, when set to a value parseable as true by strconv.ParseBool

@@ -28,13 +28,27 @@ import (
 // and ContentBase64 only produce a single regular file at Dst — they
 // cannot describe a directory tree.
 type FileEntry struct {
-	// Src is the path on the host. May be a file, directory, or symlink.
+	// Src is the path on the host or a network URL. May be a file,
+	// directory, or symlink on the host, or an http:// / https:// URL
+	// whose body is downloaded into a single regular file at Dst.
 	// Windows-native paths (e.g. C:\Users\me\file), %VAR% / $VAR / ${VAR}
 	// environment variable references, and a leading ~ are expanded by
 	// LoadProfile. Relative paths are resolved against the directory of
 	// the profile file when the entry was loaded via LoadProfile;
-	// otherwise against the current working directory.
+	// otherwise against the current working directory. A network URL is
+	// left as-is (only %VAR% / $VAR / ${VAR} are expanded): it is not
+	// resolved against the profile directory and a leading ~ is not
+	// expanded.
 	Src string `yaml:"src,omitempty"`
+
+	// Sha1 is an optional hex SHA-1 digest (40 hex characters) that the
+	// bytes staged from Src must match. It applies to any Src, whether a
+	// local filesystem path or a network URL (http:// or https://). When
+	// set, staging fails if the file's content does not hash to this
+	// value. Comparison is case-insensitive, so the digest may be given in
+	// upper or lower case. Only valid together with Src (not with inline
+	// Content or ContentBase64).
+	Sha1 string `yaml:"sha1,omitempty"`
 
 	// Content is an inline UTF-8 file body. When set, no host file is
 	// read: the bytes are written verbatim to Dst as a single regular
@@ -111,6 +125,19 @@ func (e FileEntry) ReplaceEnabled() bool {
 	return *e.Replace
 }
 
+// IsRemoteSrc reports whether src refers to a network URL (http:// or
+// https://) rather than a host filesystem path. The check is
+// case-insensitive on the scheme. Such sources are downloaded at staging
+// time instead of being read from the local filesystem, and are therefore
+// not resolved against the profile directory nor have a leading ~ expanded.
+func IsRemoteSrc(src string) bool {
+	s := strings.ToLower(strings.TrimSpace(src))
+	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
+}
+
+// sha1HexRE matches a 40-character lowercase-or-uppercase hex SHA-1 digest.
+var sha1HexRE = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
+
 // Validate checks that this FileEntry is well-formed: Dst must be set, and
 // exactly one source of file data (Src, Content, or ContentBase64) must be
 // provided. When ContentBase64 is set, it must also decode as standard
@@ -142,6 +169,14 @@ func (e *FileEntry) Validate() error {
 			return fmt.Errorf("%q: decoding content_base64: %w", e.Dst, err)
 		}
 		e.decodedBase64 = decoded
+	}
+	if e.Sha1 != "" {
+		if e.Src == "" {
+			return fmt.Errorf("%q: 'sha1' is only valid together with a 'src'", e.Dst)
+		}
+		if !sha1HexRE.MatchString(strings.TrimSpace(e.Sha1)) {
+			return fmt.Errorf("%q: 'sha1' must be a 40-character hex digest", e.Dst)
+		}
 	}
 	return nil
 }
@@ -463,7 +498,10 @@ func LoadProfile(path string) (*Profile, error) {
 		// operator opted into following the network (baseURL != ""),
 		// treat `src` as a sibling resource of the profile URL and
 		// download it over the network into an inline body, instead of
-		// reading from the local filesystem.
+		// reading from the local filesystem. This path enforces the
+		// same-origin/base-dir confinement in resolveProfileFileURL, so it
+		// must take precedence over the generic remote-URL handling below
+		// (an absolute URL src here is rejected, not silently fetched).
 		if baseURL != "" {
 			b64, ferr := fetchProfileFile(baseURL, src)
 			if ferr != nil {
@@ -471,6 +509,15 @@ func LoadProfile(path string) (*Profile, error) {
 			}
 			p.Files[i].Src = ""
 			p.Files[i].ContentBase64 = &b64
+			continue
+		}
+		// Network URLs are downloaded at staging time, not read from the
+		// host filesystem: only expand %VAR% / $VAR / ${VAR} and leave the
+		// URL otherwise intact (no profile-dir resolution, no ~ expansion).
+		// Surrounding whitespace is trimmed so detection (IsRemoteSrc trims
+		// before checking) and staging (fetchRemoteSrc) stay consistent.
+		if IsRemoteSrc(src) {
+			p.Files[i].Src = strings.TrimSpace(ExpandEnvVars(src))
 			continue
 		}
 		src = ExpandHostPath(src)
