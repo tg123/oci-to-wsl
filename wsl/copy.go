@@ -269,32 +269,103 @@ func writeRegularFile(tw *tar.Writer, src, tarName string, info os.FileInfo, has
 	}
 
 	if forceLF {
-		data, err := os.ReadFile(src) //nolint:gosec
+		f, err := os.Open(src) //nolint:gosec
 		if err != nil {
 			return err
 		}
+		defer func() { _ = f.Close() }()
+
+		normalize, err := shouldNormalizeCRLF(f)
+		if err != nil {
+			return err
+		}
+
+		if !normalize {
+			if _, err := f.Seek(0, io.SeekStart); err != nil {
+				return err
+			}
+			return writeRegularFileFromReader(tw, tarName, mode, info.Size(), info.ModTime(), f)
+		}
+
+		if _, err := f.Seek(0, io.SeekStart); err != nil {
+			return err
+		}
+		data, err := io.ReadAll(f)
+		if err != nil {
+			return err
+		}
+
 		return writeInlineFileModTime(tw, tarName, crlfToLF(data), mode, info.ModTime())
 	}
 
-	hdr := &tar.Header{
-		Name:    tarName,
-		Mode:    mode,
-		Size:    info.Size(),
-		ModTime: info.ModTime(),
-		Format:  tar.FormatPAX,
-	}
-	if err := tw.WriteHeader(hdr); err != nil {
-		return err
-	}
 	f, err := os.Open(src) //nolint:gosec
 	if err != nil {
 		return err
 	}
 	defer func() { _ = f.Close() }()
-	if _, err := io.Copy(tw, f); err != nil {
+	return writeRegularFileFromReader(tw, tarName, mode, info.Size(), info.ModTime(), f)
+}
+
+func writeRegularFileFromReader(tw *tar.Writer, tarName string, mode, size int64, modTime time.Time, r io.Reader) error {
+	hdr := &tar.Header{
+		Name:    tarName,
+		Mode:    mode,
+		Size:    size,
+		ModTime: modTime,
+		Format:  tar.FormatPAX,
+	}
+	if err := tw.WriteHeader(hdr); err != nil {
+		return err
+	}
+	if _, err := io.Copy(tw, r); err != nil {
 		return err
 	}
 	return nil
+}
+
+func shouldNormalizeCRLF(r io.Reader) (bool, error) {
+	const (
+		sniffLen  = 8000
+		chunkSize = 32 * 1024
+	)
+
+	buf := make([]byte, chunkSize)
+	sniffed := 0
+	hasCRLF := false
+	prevCR := false
+
+	for {
+		n, err := r.Read(buf)
+		if n > 0 {
+			chunk := buf[:n]
+
+			if prevCR && chunk[0] == '\n' {
+				hasCRLF = true
+			}
+			if bytes.Contains(chunk, []byte("\r\n")) {
+				hasCRLF = true
+			}
+			prevCR = chunk[len(chunk)-1] == '\r'
+
+			if sniffed < sniffLen {
+				check := chunk
+				if remain := sniffLen - sniffed; len(check) > remain {
+					check = check[:remain]
+				}
+				if bytes.IndexByte(check, 0) >= 0 {
+					return false, nil
+				}
+				sniffed += len(check)
+			}
+		}
+
+		if err == io.EOF {
+			return hasCRLF, nil
+		}
+		if err != nil {
+			return false, err
+		}
+	}
 }
 
 // crlfToLF normalises Windows CRLF ("\r\n") line endings to LF ("\n").
