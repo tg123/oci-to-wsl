@@ -139,6 +139,20 @@ func TestE2E(t *testing.T) {
 				mustWrite(t, filepath.Join(workDir, "assets", "hello.txt"), "hello-from-host")
 				mustWrite(t, filepath.Join(workDir, "assets", "nested", "inner.txt"), "nested-from-host")
 
+				// Make a known host-side env var available to the env
+				// expansion exercised below. Use t.Setenv so other tests
+				// (and the parent process) are unaffected.
+				t.Setenv("OCI_TO_WSL_E2E_HOST_USER", "alice-from-host")
+
+				// init_cmds covers all three shapes we now support:
+				//   1. a plain-string command (existing behavior)
+				//   2. an object form with `env` whose values are
+				//      expanded from the *Windows-side* env at load time
+				//      and then exported in the in-distro shell before
+				//      `cmd` runs
+				//   3. an object form with `run_as` so the command runs
+				//      as a non-root in-distro user (created here via
+				//      busybox `adduser -D`).
 				profile := `name: e2e-copy
 image: alpine:latest
 files:
@@ -150,6 +164,17 @@ files:
     mode: "0777"
 init_cmds:
   - /usr/local/bin/bootstrap.sh
+  - cmd: |
+      echo "host_user=$host_user" > /tmp/env-marker
+      echo "literal=$literal" >> /tmp/env-marker
+    env:
+      - name: host_user
+        value: $OCI_TO_WSL_E2E_HOST_USER
+      - name: literal
+        value: 'with spaces and a $$dollar'
+  - adduser -D e2euser
+  - cmd: id -un > /tmp/whoami-marker
+    run_as: e2euser
 `
 				profilePath := filepath.Join(workDir, "profile.yaml")
 				mustWrite(t, profilePath, profile)
@@ -171,9 +196,18 @@ init_cmds:
 				{name: "inner_content", script: "cat /opt/assets/nested/inner.txt", want: "nested-from-host"},
 				{name: "assets_dir_mode", script: "stat -c '%a' /opt/assets", want: "777"},
 				{name: "assets_recursive_mode", script: "stat -c '%a' /opt/assets/nested/inner.txt", want: "777"},
-				// init_cmds ran after copy
+				// init_cmds (plain-string form) ran after copy.
 				{name: "bootstrap_marker", script: "cat /tmp/bootstrap-marker", wantSub: "bootstrap-ran"},
 				{name: "init_read_asset", script: "cat /tmp/assets-hello", wantSub: "hello-from-host"},
+				// init_cmds env form: host_user was expanded against the
+				// Windows-side env at load time and exported in-distro,
+				// and `$$dollar` was rewritten by ExpandEnvVars to a
+				// literal `$dollar` (the `$$` escape for a literal `$`).
+				{name: "init_env_host_user", script: "cat /tmp/env-marker", wantSub: "host_user=alice-from-host"},
+				{name: "init_env_literal", script: "cat /tmp/env-marker", wantSub: "literal=with spaces and a $dollar"},
+				// init_cmds run_as form: the command ran as the
+				// in-distro user we created in the previous step.
+				{name: "init_run_as", script: "cat /tmp/whoami-marker", want: "e2euser"},
 			},
 		},
 		{

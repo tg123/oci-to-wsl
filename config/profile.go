@@ -278,8 +278,11 @@ type Profile struct {
 	// directory will overlay onto the directory created here.
 	Users []User `yaml:"users"`
 
-	// InitCmds is a list of shell commands to run inside the new WSL instance after it is created.
-	InitCmds []string `yaml:"init_cmds"`
+	// InitCmds is a list of shell commands to run inside the new WSL
+	// instance after it is created. Each entry may be either a plain
+	// string (the command to run) or a mapping with `cmd` and optional
+	// `env`/`run_as` keys; see InitCmd for details.
+	InitCmds []InitCmd `yaml:"init_cmds"`
 
 	// WslConf, when set, writes /etc/wsl.conf into the rootfs tar before
 	// `wsl --import` runs. It is syntactic sugar over `copies`/`deletes`
@@ -289,6 +292,79 @@ type Profile struct {
 	// "replace" it discards any existing /etc/wsl.conf and writes Content
 	// verbatim.
 	WslConf *WslConfEntry `yaml:"wsl_conf"`
+}
+
+// EnvVar is a single environment variable to set when running an init
+// command inside the WSL distribution. Value may reference host-side
+// environment variables using Windows `%NAME%` and POSIX `$NAME` /
+// `${NAME}` syntax — those references are expanded at profile-load time
+// against the oci-to-wsl process's environment (i.e. the Windows side),
+// so a profile can forward values like `%USERNAME%` or `$USER` from the
+// host into the new distribution. Unknown variables are left untouched.
+type EnvVar struct {
+	Name  string `yaml:"name"`
+	Value string `yaml:"value"`
+}
+
+// InitCmd describes a single command to run inside the new WSL instance
+// after `wsl --import` finishes. It accepts two YAML shapes:
+//
+// init_cmds:
+//   - echo hello                # plain string form
+//   - cmd: echo "$USER"         # object form
+//     run_as: alice             # optional – run as this in-distro user
+//     env:
+//   - name: USER
+//     value: $USER          # expanded from the host env at load time
+//
+// Env entries are exported in the in-distro shell before Cmd runs, so
+// Cmd may reference them with normal shell substitution. RunAs, when
+// set, switches to the named user inside the distribution using `su`
+// (which must exist in the rootfs and accept the call without a password
+// — the default for `wsl --import` which launches as root).
+type InitCmd struct {
+	Cmd   string   `yaml:"cmd"`
+	RunAs string   `yaml:"run_as"`
+	Env   []EnvVar `yaml:"env"`
+}
+
+// UnmarshalYAML accepts either a scalar string ("echo 1") or a mapping
+// with `cmd`, optional `env`, and optional `run_as` fields and populates
+// the receiver accordingly. Any other YAML kind yields a typed error so
+// a malformed profile surfaces a clear message rather than a silent
+// empty entry.
+func (c *InitCmd) UnmarshalYAML(node *yaml.Node) error {
+	switch node.Kind {
+	case yaml.ScalarNode:
+		var s string
+		if err := node.Decode(&s); err != nil {
+			return fmt.Errorf("init_cmds: decoding scalar entry: %w", err)
+		}
+		c.Cmd = s
+		c.RunAs = ""
+		c.Env = nil
+		return nil
+	case yaml.MappingNode:
+		// Use a side type to avoid recursing back into this method.
+		type rawInitCmd struct {
+			Cmd   string   `yaml:"cmd"`
+			RunAs string   `yaml:"run_as"`
+			Env   []EnvVar `yaml:"env"`
+		}
+		var r rawInitCmd
+		if err := node.Decode(&r); err != nil {
+			return fmt.Errorf("init_cmds: decoding mapping entry: %w", err)
+		}
+		if strings.TrimSpace(r.Cmd) == "" {
+			return fmt.Errorf("init_cmds: mapping entry at line %d is missing required 'cmd' field", node.Line)
+		}
+		c.Cmd = r.Cmd
+		c.RunAs = r.RunAs
+		c.Env = r.Env
+		return nil
+	default:
+		return fmt.Errorf("init_cmds: entry at line %d must be a string or a mapping with 'cmd' and optional 'env'/'run_as'", node.Line)
+	}
 }
 
 // WslConfEntry describes how to materialise /etc/wsl.conf in the rootfs tar.
@@ -523,8 +599,19 @@ func LoadProfile(path string) (*Profile, error) {
 		p.Files[i].Src = src
 	}
 
+	// Expand host-side env-var references in init_cmds env values so a
+	// profile can forward Windows-side environment variables (e.g.
+	// `$USER`, `%USERNAME%`) into the new distribution. The Cmd string
+	// itself is *not* expanded — it runs in the WSL shell, where the
+	// caller likely wants substitutions to happen in-distro.
+	for i := range p.InitCmds {
+		for j := range p.InitCmds[i].Env {
+			p.InitCmds[i].Env[j].Value = ExpandEnvVars(p.InitCmds[i].Env[j].Value)
+		}
+	}
+
 	// Expand %NAME% / $NAME in `deletes` so a single profile can target
-	// host-templated paths (e.g. /home/%USERNAME%/...). InitCmds are
+	// host-templated paths (e.g. /home/%USERNAME%/...). InitCmds.Cmd is
 	// deliberately NOT expanded because shell scripts there use $VAR and
 	// ${VAR} for runtime values that must survive YAML load unchanged.
 	for i := range p.Deletes {
@@ -775,14 +862,21 @@ var posixEnvVarRE = regexp.MustCompile(`\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za
 
 // ExpandEnvVars expands Windows %NAME% and POSIX $NAME / ${NAME} environment
 // variable references in s. Unknown variables are left untouched verbatim
-// (e.g. a typo'd "$FOO" stays "$FOO", not "${FOO}") so they surface as a
-// downstream error rather than silently becoming an empty string. Unlike
+// (e.g. a typo'd "$FOO" stays "$FOO") so they surface as a downstream error
+// rather than silently becoming an empty string. A literal "$$" is treated
+// as an escape for a single "$" (POSIX shell convention) so callers can
+// forward a literal dollar sign through this expander. Unlike
 // ExpandHostPath it does not expand a leading ~, since user fields (login
 // names, gecos, etc.) are not host paths.
 func ExpandEnvVars(s string) string {
 	if s == "" {
 		return s
 	}
+	// Use a NUL-delimited placeholder (cannot appear in YAML scalars) to
+	// stash literal "$$" so neither the Windows %NAME% pass nor the POSIX
+	// $NAME pass sees a stray "$" that could be mis-parsed.
+	const dollarEscape = "\x00OCI_TO_WSL_LITERAL_DOLLAR\x00"
+	s = strings.ReplaceAll(s, "$$", dollarEscape)
 	s = winEnvVarRE.ReplaceAllStringFunc(s, func(m string) string {
 		name := m[1 : len(m)-1]
 		if v, ok := os.LookupEnv(name); ok {
@@ -802,6 +896,7 @@ func ExpandEnvVars(s string) string {
 		}
 		return m
 	})
+	s = strings.ReplaceAll(s, dollarEscape, "$")
 	return s
 }
 

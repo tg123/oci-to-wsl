@@ -183,8 +183,18 @@ wsl_conf:                        # optional – syntactic sugar for writing /etc
   #   user:
   #     default: "%USERNAME%"
 init_cmds:                       # optional – run inside the new distro after import
-  - apt-get update -y
+  - apt-get update -y            # plain-string form: command line as-is
   - apt-get install -y curl git
+  - cmd: |                       # object form: command plus env vars / run_as
+      echo "imported by $host_user" > /etc/oci-to-wsl.info
+    env:
+      - name: host_user          # value is expanded against the *Windows* env
+        value: $USER             # at profile-load time (%NAME% / ${NAME} also
+                                 # work). Unknown variables are preserved
+                                 # verbatim ($FOO stays as $FOO); write `$$`
+                                 # to forward a literal `$`.
+  - cmd: id > /home/alice/whoami.txt
+    run_as: alice                # optional – run this command as in-distro user `alice`
 ```
 
 See [`example-profile.yaml`](example-profile.yaml) for a complete example.
