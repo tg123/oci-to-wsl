@@ -187,7 +187,9 @@ init_cmds:                       # optional – run inside the new distro after 
   - apt-get install -y curl git
 ```
 
-See [`example-profile.yaml`](example-profile.yaml) for a complete example.
+See [`example-profile.yaml`](example-profile.yaml) for a complete example, and
+[`recipes/`](recipes/) for ready-to-launch profiles you can run straight from a
+URL (e.g. [`kind`](recipes/kind/) for single-node Kubernetes in WSL2).
 
 When the profile is loaded from a `-`/stdin or an `http(s)://` URL there is no
 enclosing directory, so relative `files[].src` paths resolve against the
