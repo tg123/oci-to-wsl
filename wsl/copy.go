@@ -258,8 +258,12 @@ func writeParentDirs(tw *tar.Writer, dst string, addedDirs map[string]struct{}) 
 }
 
 // writeRegularFile emits a single regular-file entry at tarName. When
-// forceLF is true and CRLF normalisation is needed, content is rewritten
-// through a temporary file so large files are not buffered in memory.
+// forceLF is true and CRLF normalisation is needed, the file is rewritten in
+// a streaming pass directly into the tar without buffering the whole file in
+// memory or staging it through a temporary file. The source on disk is
+// seekable, so a cheap pre-scan computes the exact normalised size (each
+// "\r\n" pair drops one byte) up front; the tar header therefore carries the
+// final size before the second streaming pass writes the converted bytes.
 func writeRegularFile(tw *tar.Writer, src, tarName string, info os.FileInfo, hasMode bool, modeOverride int64, forceLF bool) error {
 	mode := int64(info.Mode().Perm())
 	if hasMode {
@@ -267,45 +271,50 @@ func writeRegularFile(tw *tar.Writer, src, tarName string, info os.FileInfo, has
 	}
 
 	if forceLF {
-		// Stream once to decide whether normalisation is needed, then keep the
-		// plain streaming path for binary/no-CRLF files so large files are not
-		// buffered unless we must rewrite their bytes.
+		// First pass: decide whether normalisation is needed and, if so, count
+		// the CRLF pairs so the exact output size is known without buffering.
 		f, err := os.Open(src) //nolint:gosec
 		if err != nil {
 			return err
 		}
 		defer func() { _ = f.Close() }()
 
-		normalize, err := shouldNormalizeCRLF(f)
+		normalize, crlfCount, err := shouldNormalizeCRLF(f)
 		if err != nil {
 			return err
-		}
-
-		if !normalize {
-			if _, err := f.Seek(0, io.SeekStart); err != nil {
-				return err
-			}
-			return writeRegularFileFromReader(tw, tarName, mode, info.Size(), info.ModTime(), f)
 		}
 
 		if _, err := f.Seek(0, io.SeekStart); err != nil {
 			return err
 		}
-		tmp, normalizedSize, err := rewriteCRLFToTemp(f)
+
+		// Binary or no-CRLF files keep the plain streaming copy with the
+		// original size.
+		if !normalize {
+			return writeRegularFileFromReader(tw, tarName, mode, info.Size(), info.ModTime(), f)
+		}
+
+		// Second pass: write the header with the exact normalised size, then
+		// stream the CRLF->LF conversion straight into the tar.
+		normalizedSize := info.Size() - crlfCount
+		hdr := &tar.Header{
+			Name:    tarName,
+			Mode:    mode,
+			Size:    normalizedSize,
+			ModTime: info.ModTime(),
+			Format:  tar.FormatPAX,
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			return err
+		}
+		written, err := copyCRLFToLF(tw, f)
 		if err != nil {
 			return err
 		}
-		defer func() {
-			_ = os.Remove(tmp.Name())
-		}()
-		defer func() {
-			_ = tmp.Close()
-		}()
-
-		if _, err := tmp.Seek(0, io.SeekStart); err != nil {
-			return err
+		if written != normalizedSize {
+			return fmt.Errorf("force_lf: normalised size mismatch for %s: wrote %d, header declared %d", src, written, normalizedSize)
 		}
-		return writeRegularFileFromReader(tw, tarName, mode, normalizedSize, info.ModTime(), tmp)
+		return nil
 	}
 
 	f, err := os.Open(src) //nolint:gosec
@@ -314,22 +323,6 @@ func writeRegularFile(tw *tar.Writer, src, tarName string, info os.FileInfo, has
 	}
 	defer func() { _ = f.Close() }()
 	return writeRegularFileFromReader(tw, tarName, mode, info.Size(), info.ModTime(), f)
-}
-
-func rewriteCRLFToTemp(r io.Reader) (*os.File, int64, error) {
-	tmp, err := os.CreateTemp("", "oci-to-wsl-force-lf-*")
-	if err != nil {
-		return nil, 0, err
-	}
-
-	size, err := copyCRLFToLF(tmp, r)
-	if err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmp.Name())
-		return nil, 0, err
-	}
-
-	return tmp, size, nil
 }
 
 func copyCRLFToLF(w io.Writer, r io.Reader) (int64, error) {
@@ -443,7 +436,13 @@ func writeRegularFileFromReader(tw *tar.Writer, tarName string, mode, size int64
 	return nil
 }
 
-func shouldNormalizeCRLF(r io.Reader) (bool, error) {
+// shouldNormalizeCRLF streams r once and reports whether its content should
+// have CRLF normalised to LF, plus the exact number of "\r\n" pairs found.
+// The pair count lets the caller compute the post-normalisation size (each
+// pair drops one byte) without buffering the file. Binary content (a NUL
+// byte within the first 8000 bytes, matching Git's heuristic) is never
+// normalised, so it returns (false, 0, nil).
+func shouldNormalizeCRLF(r io.Reader) (bool, int64, error) {
 	const (
 		// Keep the binary sniff length aligned with Git's heuristic:
 		// https://github.com/git/git/blob/master/xdiff-interface.c#L198-L204
@@ -453,7 +452,7 @@ func shouldNormalizeCRLF(r io.Reader) (bool, error) {
 
 	buf := make([]byte, chunkSize)
 	sniffed := 0
-	hasCRLF := false
+	var crlfCount int64
 	prevCR := false
 
 	for {
@@ -461,31 +460,37 @@ func shouldNormalizeCRLF(r io.Reader) (bool, error) {
 		if n > 0 {
 			chunk := buf[:n]
 
-			if prevCR && chunk[0] == '\n' {
-				hasCRLF = true
-			}
-			if bytes.Contains(chunk, []byte("\r\n")) {
-				hasCRLF = true
-			}
-			prevCR = chunk[len(chunk)-1] == '\r'
-
 			if sniffed < sniffLen {
 				check := chunk
 				if remain := sniffLen - sniffed; len(check) > remain {
 					check = check[:remain]
 				}
 				if bytes.IndexByte(check, 0) >= 0 {
-					return false, nil
+					return false, 0, nil
 				}
 				sniffed += len(check)
 			}
+
+			// Count "\r\n" pairs, accounting for a pair split across chunks.
+			start := 0
+			if prevCR && chunk[0] == '\n' {
+				crlfCount++
+				start = 1
+			}
+			for i := start; i < len(chunk)-1; i++ {
+				if chunk[i] == '\r' && chunk[i+1] == '\n' {
+					crlfCount++
+					i++
+				}
+			}
+			prevCR = chunk[len(chunk)-1] == '\r'
 		}
 
 		if err == io.EOF {
-			return hasCRLF, nil
+			return crlfCount > 0, crlfCount, nil
 		}
 		if err != nil {
-			return false, err
+			return false, 0, err
 		}
 	}
 }
