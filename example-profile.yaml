@@ -40,16 +40,16 @@ install_dir: C:\WSL\my-ubuntu
 # at staging time and written as a single file at 'dst' (only %VAR% / $VAR /
 # ${VAR} are expanded in a URL; it is not resolved against the profile dir).
 # 'sha1' is optional and, when set, must be the 40-character hex SHA-1 digest
-# of the bytes staged from 'src'; staging fails on a mismatch. It applies to
-# any 'src', whether a local path or an http:// / https:// URL, and the
-# comparison is case-insensitive. It is only valid together with a 'src'
-# (not with inline content). 'dst' must be an absolute POSIX
-# path (start with '/') and supports the same %VAR% / $VAR / ${VAR} host-env
-# expansion as 'src' so a single profile can target per-host paths such as
-# /home/%USERNAME%/.config. 'mode' is optional and is baked into the tar
-# header (no chmod step runs inside the distribution); for a directory
-# source it applies recursively to all regular files; for inline content
-# it defaults to 0644. 'replace' is optional and defaults to true: any
+# of the bytes staged from 'src' after optional 'force_lf' normalisation;
+# staging fails on a mismatch. It applies to any 'src', whether a local path
+# or an http:// / https:// URL, and the comparison is case-insensitive. It is
+# only valid together with a 'src' (not with inline content). 'dst' must be
+# an absolute POSIX path (start with '/') and supports the same %VAR% / $VAR /
+# ${VAR} host-env expansion as 'src' so a single profile can target per-host
+# paths such as /home/%USERNAME%/.config. 'mode' is optional and is baked into
+# the tar header (no chmod step runs inside the distribution); for a directory
+# source it applies recursively to all regular files; for inline content it
+# defaults to 0644. 'replace' is optional and defaults to true: any
 # existing entry at 'dst' in the upstream rootfs tar is dropped before the
 # file is staged (for a directory 'dst' the whole subtree is removed). Set
 # 'replace: false' to overlay onto the existing tree instead. 'force_lf' is
@@ -58,8 +58,7 @@ install_dir: C:\WSL\my-ubuntu
 # scripts and config files authored on Windows. It applies to a host file
 # source, every regular file under a directory source, and inline
 # 'content'/'content_base64' bodies; symlinks are never rewritten. Files
-# that look binary (contain a NUL byte) are skipped so their bytes stay
-# intact.
+# with a NUL byte in the first 8000 bytes are treated as binary and skipped.
 files:
   - src: ./scripts/bootstrap.sh
     dst: /usr/local/bin/bootstrap.sh

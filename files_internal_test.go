@@ -40,26 +40,34 @@ func TestVerifySha1(t *testing.T) {
 }
 
 func TestFileEntryToCopy_RemoteSrcWithSha1(t *testing.T) {
-	body := []byte("#!/bin/sh\necho hi\n")
+	body := []byte("#!/bin/sh\r\necho hi\r\n")
+	normalized := []byte("#!/bin/sh\necho hi\n")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(body)
 	}))
 	defer srv.Close()
 
-	// Happy path: download and digest matches.
-	ce, err := fileEntryToCopy(config.FileEntry{Src: srv.URL, Dst: "/usr/local/bin/x", Sha1: sha1Hex(body)})
+	// With ForceLF, the digest applies to the normalized staged bytes.
+	ce, err := fileEntryToCopy(config.FileEntry{
+		Src: srv.URL, Dst: "/usr/local/bin/x", Sha1: sha1Hex(normalized), ForceLF: true,
+	})
 	if err != nil {
 		t.Fatalf("fileEntryToCopy: %v", err)
 	}
 	if ce.Src != "" {
 		t.Errorf("remote src should be staged as inline data, got Src=%q", ce.Src)
 	}
-	if string(ce.Data) != string(body) {
-		t.Errorf("Data = %q, want %q", ce.Data, body)
+	if string(ce.Data) != string(normalized) {
+		t.Errorf("Data = %q, want %q", ce.Data, normalized)
+	}
+	if ce.ForceLF {
+		t.Error("remote data should be normalized before staging")
 	}
 
-	// Mismatched digest fails.
-	if _, err := fileEntryToCopy(config.FileEntry{Src: srv.URL, Dst: "/x", Sha1: "da39a3ee5e6b4b0d3255bfef95601890afd80709"}); err == nil {
+	// A digest of the pre-normalization source bytes does not match.
+	if _, err := fileEntryToCopy(config.FileEntry{
+		Src: srv.URL, Dst: "/x", Sha1: sha1Hex(body), ForceLF: true,
+	}); err == nil {
 		t.Error("expected sha1 mismatch error")
 	} else if !strings.Contains(err.Error(), "sha1 mismatch") {
 		t.Errorf("error = %v, want sha1 mismatch", err)
@@ -103,7 +111,8 @@ func TestFileEntryToCopy_LocalSrc(t *testing.T) {
 
 func TestFileEntryToCopy_LocalSrcWithSha1(t *testing.T) {
 	dir := t.TempDir()
-	body := []byte("local file content\n")
+	body := []byte("local\r\nfile\r\ncontent\r\n")
+	normalized := []byte("local\nfile\ncontent\n")
 	p := filepath.Join(dir, "f.txt")
 	if err := os.WriteFile(p, body, 0o644); err != nil {
 		t.Fatal(err)
@@ -111,7 +120,9 @@ func TestFileEntryToCopy_LocalSrcWithSha1(t *testing.T) {
 
 	// Matching digest: the local file is verified but still staged via Src
 	// so its mode/symlink/directory semantics are preserved.
-	ce, err := fileEntryToCopy(config.FileEntry{Src: p, Dst: "/etc/f", Sha1: sha1Hex(body)})
+	ce, err := fileEntryToCopy(config.FileEntry{
+		Src: p, Dst: "/etc/f", Sha1: sha1Hex(normalized), ForceLF: true,
+	})
 	if err != nil {
 		t.Fatalf("fileEntryToCopy: %v", err)
 	}
@@ -121,9 +132,14 @@ func TestFileEntryToCopy_LocalSrcWithSha1(t *testing.T) {
 	if ce.Data != nil {
 		t.Errorf("verified local src should not be inlined, got Data=%q", ce.Data)
 	}
+	if !ce.ForceLF {
+		t.Error("verified local src should retain ForceLF for streamed staging")
+	}
 
-	// Mismatched digest fails.
-	if _, err := fileEntryToCopy(config.FileEntry{Src: p, Dst: "/etc/f", Sha1: "da39a3ee5e6b4b0d3255bfef95601890afd80709"}); err == nil {
+	// A digest of the pre-normalization source bytes does not match.
+	if _, err := fileEntryToCopy(config.FileEntry{
+		Src: p, Dst: "/etc/f", Sha1: sha1Hex(body), ForceLF: true,
+	}); err == nil {
 		t.Error("expected sha1 mismatch error")
 	} else if !strings.Contains(err.Error(), "sha1 mismatch") {
 		t.Errorf("error = %v, want sha1 mismatch", err)

@@ -52,9 +52,9 @@ type CopyEntry struct {
 	// ForceLF, when true, normalises CRLF ("\r\n") line endings to LF
 	// ("\n") in the file body before it is written into the tar. It
 	// applies to inline Data, to a regular-file Src, and to every regular
-	// file under a directory Src; symlinks are never rewritten. Files that
-	// look binary (contain a NUL byte) are left untouched so their bytes
-	// are not corrupted.
+	// file under a directory Src; symlinks are never rewritten. Files with
+	// a NUL byte in the first 8000 bytes are treated as binary and left
+	// untouched.
 	ForceLF bool
 }
 
@@ -151,7 +151,7 @@ func injectOne(tw *tar.Writer, e CopyEntry, addedDirs map[string]struct{}) error
 		}
 		data := e.Data
 		if e.ForceLF {
-			data = crlfToLF(data)
+			data = NormalizeCRLFToLF(data)
 		}
 		return writeInlineFile(tw, dst, data, mode)
 	}
@@ -495,11 +495,10 @@ func shouldNormalizeCRLF(r io.Reader) (bool, int64, error) {
 	}
 }
 
-// crlfToLF normalises Windows CRLF ("\r\n") line endings to LF ("\n").
-// A lone CR (old Mac style) or LF is left untouched. Binary content (as
-// detected by isBinary) is returned verbatim so a "\r\n" byte pair that is
-// part of e.g. an image or executable is never rewritten.
-func crlfToLF(data []byte) []byte {
+// NormalizeCRLFToLF normalises Windows CRLF ("\r\n") line endings to LF
+// ("\n"). A lone CR (old Mac style) or LF is left untouched. Content with a
+// NUL byte in the first 8000 bytes is treated as binary and returned verbatim.
+func NormalizeCRLFToLF(data []byte) []byte {
 	if isBinary(data) || !bytes.Contains(data, []byte("\r\n")) {
 		return data
 	}
