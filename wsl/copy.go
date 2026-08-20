@@ -2,6 +2,7 @@ package wsl
 
 import (
 	"archive/tar"
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -47,6 +48,14 @@ type CopyEntry struct {
 	// and every regular file written under Dst (i.e. effectively recursive).
 	// For inline Data, defaults to 0644 when unset.
 	Mode string
+
+	// ForceLF, when true, normalises CRLF ("\r\n") line endings to LF
+	// ("\n") in the file body before it is written into the tar. It
+	// applies to inline Data, to a regular-file Src, and to every regular
+	// file under a directory Src; symlinks are never rewritten. Files with
+	// a NUL byte in the first 8000 bytes are treated as binary and left
+	// untouched.
+	ForceLF bool
 }
 
 // InjectCopies appends entries to an existing rootfs tar archive so that
@@ -140,7 +149,11 @@ func injectOne(tw *tar.Writer, e CopyEntry, addedDirs map[string]struct{}) error
 		if hasMode {
 			mode = modeOverride
 		}
-		return writeInlineFile(tw, dst, e.Data, mode)
+		data := e.Data
+		if e.ForceLF {
+			data = NormalizeCRLFToLF(data)
+		}
+		return writeInlineFile(tw, dst, data, mode)
 	}
 
 	// Use Lstat so a top-level symlink is preserved as a symlink rather
@@ -169,9 +182,9 @@ func injectOne(tw *tar.Writer, e CopyEntry, addedDirs map[string]struct{}) error
 			Format:   tar.FormatPAX,
 		})
 	case info.IsDir():
-		return writeDirTree(tw, e.Src, dst, hasMode, modeOverride, addedDirs)
+		return writeDirTree(tw, e.Src, dst, hasMode, modeOverride, e.ForceLF, addedDirs)
 	default:
-		return writeRegularFile(tw, e.Src, dst, info, hasMode, modeOverride)
+		return writeRegularFile(tw, e.Src, dst, info, hasMode, modeOverride, e.ForceLF)
 	}
 }
 
@@ -180,11 +193,17 @@ func injectOne(tw *tar.Writer, e CopyEntry, addedDirs map[string]struct{}) error
 // epoch so that identical inline content produces an identical tar entry on
 // every run (inline data has no natural source timestamp).
 func writeInlineFile(tw *tar.Writer, tarName string, data []byte, mode int64) error {
+	return writeInlineFileModTime(tw, tarName, data, mode, time.Unix(0, 0))
+}
+
+// writeInlineFileModTime writes a single regular-file entry at tarName whose
+// body is the supplied byte slice, using the given modification time.
+func writeInlineFileModTime(tw *tar.Writer, tarName string, data []byte, mode int64, modTime time.Time) error {
 	hdr := &tar.Header{
 		Name:    tarName,
 		Mode:    mode,
 		Size:    int64(len(data)),
-		ModTime: time.Unix(0, 0),
+		ModTime: modTime,
 		Format:  tar.FormatPAX,
 	}
 	if err := tw.WriteHeader(hdr); err != nil {
@@ -238,36 +257,271 @@ func writeParentDirs(tw *tar.Writer, dst string, addedDirs map[string]struct{}) 
 	return nil
 }
 
-// writeRegularFile emits a single regular-file entry at tarName.
-func writeRegularFile(tw *tar.Writer, src, tarName string, info os.FileInfo, hasMode bool, modeOverride int64) error {
+// writeRegularFile emits a single regular-file entry at tarName. When
+// forceLF is true and CRLF normalisation is needed, the file is rewritten in
+// a streaming pass directly into the tar without buffering the whole file in
+// memory or staging it through a temporary file. The source on disk is
+// seekable, so a cheap pre-scan computes the exact normalised size (each
+// "\r\n" pair drops one byte) up front; the tar header therefore carries the
+// final size before the second streaming pass writes the converted bytes.
+func writeRegularFile(tw *tar.Writer, src, tarName string, info os.FileInfo, hasMode bool, modeOverride int64, forceLF bool) error {
 	mode := int64(info.Mode().Perm())
 	if hasMode {
 		mode = modeOverride
 	}
-	hdr := &tar.Header{
-		Name:    tarName,
-		Mode:    mode,
-		Size:    info.Size(),
-		ModTime: info.ModTime(),
-		Format:  tar.FormatPAX,
+
+	if forceLF {
+		// First pass: decide whether normalisation is needed and, if so, count
+		// the CRLF pairs so the exact output size is known without buffering.
+		f, err := os.Open(src) //nolint:gosec
+		if err != nil {
+			return err
+		}
+		defer func() { _ = f.Close() }()
+
+		normalize, crlfCount, err := shouldNormalizeCRLF(f)
+		if err != nil {
+			return err
+		}
+
+		if _, err := f.Seek(0, io.SeekStart); err != nil {
+			return err
+		}
+
+		// Binary or no-CRLF files keep the plain streaming copy with the
+		// original size.
+		if !normalize {
+			return writeRegularFileFromReader(tw, tarName, mode, info.Size(), info.ModTime(), f)
+		}
+
+		// Second pass: write the header with the exact normalised size, then
+		// stream the CRLF->LF conversion straight into the tar.
+		normalizedSize := info.Size() - crlfCount
+		hdr := &tar.Header{
+			Name:    tarName,
+			Mode:    mode,
+			Size:    normalizedSize,
+			ModTime: info.ModTime(),
+			Format:  tar.FormatPAX,
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			return err
+		}
+		written, err := copyCRLFToLF(tw, f)
+		if err != nil {
+			return err
+		}
+		if written != normalizedSize {
+			return fmt.Errorf("force_lf: normalised size mismatch for %s: wrote %d, header declared %d", src, written, normalizedSize)
+		}
+		return nil
 	}
-	if err := tw.WriteHeader(hdr); err != nil {
-		return err
-	}
+
 	f, err := os.Open(src) //nolint:gosec
 	if err != nil {
 		return err
 	}
 	defer func() { _ = f.Close() }()
-	if _, err := io.Copy(tw, f); err != nil {
+	return writeRegularFileFromReader(tw, tarName, mode, info.Size(), info.ModTime(), f)
+}
+
+func copyCRLFToLF(w io.Writer, r io.Reader) (int64, error) {
+	const chunkSize = 32 * 1024
+
+	buf := make([]byte, chunkSize)
+	var total int64
+	prevCR := false
+
+	writeBytes := func(p []byte) error {
+		if len(p) == 0 {
+			return nil
+		}
+		n, err := w.Write(p)
+		total += int64(n)
+		if err != nil {
+			return err
+		}
+		if n != len(p) {
+			return io.ErrShortWrite
+		}
+		return nil
+	}
+
+	for {
+		n, err := r.Read(buf)
+		if n > 0 {
+			chunk := buf[:n]
+			start := 0
+
+			if prevCR {
+				if chunk[0] == '\n' {
+					if werr := writeBytes([]byte{'\n'}); werr != nil {
+						return total, werr
+					}
+					start = 1
+				} else {
+					if werr := writeBytes([]byte{'\r'}); werr != nil {
+						return total, werr
+					}
+				}
+				prevCR = false
+			}
+
+			if start >= len(chunk) {
+				continue
+			}
+
+			last := start
+			for i := start; i < len(chunk); i++ {
+				if chunk[i] != '\r' {
+					continue
+				}
+
+				if i+1 < len(chunk) {
+					if chunk[i+1] != '\n' {
+						continue
+					}
+
+					if werr := writeBytes(chunk[last:i]); werr != nil {
+						return total, werr
+					}
+					if werr := writeBytes([]byte{'\n'}); werr != nil {
+						return total, werr
+					}
+					i++
+					last = i + 1
+					continue
+				}
+
+				if werr := writeBytes(chunk[last:i]); werr != nil {
+					return total, werr
+				}
+				prevCR = true
+				last = i + 1
+			}
+
+			if werr := writeBytes(chunk[last:]); werr != nil {
+				return total, werr
+			}
+		}
+
+		if err == io.EOF {
+			if prevCR {
+				if werr := writeBytes([]byte{'\r'}); werr != nil {
+					return total, werr
+				}
+			}
+			return total, nil
+		}
+		if err != nil {
+			return total, err
+		}
+	}
+}
+
+func writeRegularFileFromReader(tw *tar.Writer, tarName string, mode, size int64, modTime time.Time, r io.Reader) error {
+	hdr := &tar.Header{
+		Name:    tarName,
+		Mode:    mode,
+		Size:    size,
+		ModTime: modTime,
+		Format:  tar.FormatPAX,
+	}
+	if err := tw.WriteHeader(hdr); err != nil {
+		return err
+	}
+	if _, err := io.Copy(tw, r); err != nil {
 		return err
 	}
 	return nil
 }
 
+// shouldNormalizeCRLF streams r once and reports whether its content should
+// have CRLF normalised to LF, plus the exact number of "\r\n" pairs found.
+// The pair count lets the caller compute the post-normalisation size (each
+// pair drops one byte) without buffering the file. Binary content (a NUL
+// byte within the first 8000 bytes, matching Git's heuristic) is never
+// normalised, so it returns (false, 0, nil).
+func shouldNormalizeCRLF(r io.Reader) (bool, int64, error) {
+	const (
+		// Keep the binary sniff length aligned with Git's heuristic:
+		// https://github.com/git/git/blob/master/xdiff-interface.c#L198-L204
+		sniffLen  = 8000
+		chunkSize = 32 * 1024
+	)
+
+	buf := make([]byte, chunkSize)
+	sniffed := 0
+	var crlfCount int64
+	prevCR := false
+
+	for {
+		n, err := r.Read(buf)
+		if n > 0 {
+			chunk := buf[:n]
+
+			if sniffed < sniffLen {
+				check := chunk
+				if remain := sniffLen - sniffed; len(check) > remain {
+					check = check[:remain]
+				}
+				if bytes.IndexByte(check, 0) >= 0 {
+					return false, 0, nil
+				}
+				sniffed += len(check)
+			}
+
+			// Count "\r\n" pairs, accounting for a pair split across chunks.
+			start := 0
+			if prevCR && chunk[0] == '\n' {
+				crlfCount++
+				start = 1
+			}
+			for i := start; i < len(chunk)-1; i++ {
+				if chunk[i] == '\r' && chunk[i+1] == '\n' {
+					crlfCount++
+					i++
+				}
+			}
+			prevCR = chunk[len(chunk)-1] == '\r'
+		}
+
+		if err == io.EOF {
+			return crlfCount > 0, crlfCount, nil
+		}
+		if err != nil {
+			return false, 0, err
+		}
+	}
+}
+
+// NormalizeCRLFToLF normalises Windows CRLF ("\r\n") line endings to LF
+// ("\n"). A lone CR (old Mac style) or LF is left untouched. Content with a
+// NUL byte in the first 8000 bytes is treated as binary and returned verbatim.
+func NormalizeCRLFToLF(data []byte) []byte {
+	if isBinary(data) || !bytes.Contains(data, []byte("\r\n")) {
+		return data
+	}
+	return bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
+}
+
+// isBinary reports whether data looks like binary (non-text) content. It
+// uses the same heuristic as git: the presence of a NUL byte within the
+// first 8000 bytes marks the content as binary. This keeps force_lf from
+// corrupting binary files that happen to contain a "\r\n" byte sequence.
+// Reference:
+// https://github.com/git/git/blob/master/xdiff-interface.c#L198-L204
+func isBinary(data []byte) bool {
+	const sniffLen = 8000
+	if len(data) > sniffLen {
+		data = data[:sniffLen]
+	}
+	return bytes.IndexByte(data, 0) >= 0
+}
+
 // writeDirTree walks src and emits the directory plus all children under
 // dstBase (relative tar path).
-func writeDirTree(tw *tar.Writer, src, dstBase string, hasMode bool, modeOverride int64, addedDirs map[string]struct{}) error {
+func writeDirTree(tw *tar.Writer, src, dstBase string, hasMode bool, modeOverride int64, forceLF bool, addedDirs map[string]struct{}) error {
 	src = filepath.Clean(src)
 
 	// Emit the destination directory itself first.
@@ -336,7 +590,7 @@ func writeDirTree(tw *tar.Writer, src, dstBase string, hasMode bool, modeOverrid
 				Format:   tar.FormatPAX,
 			})
 		case info.Mode().IsRegular():
-			return writeRegularFile(tw, p, tarName, info, hasMode, modeOverride)
+			return writeRegularFile(tw, p, tarName, info, hasMode, modeOverride, forceLF)
 		default:
 			// Skip sockets, devices and other unsupported entry types.
 			return nil

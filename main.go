@@ -353,9 +353,9 @@ func loadProfile(profile *config.Profile, saveTar string) error {
 // on the entry.
 //
 // A network URL Src (http:// or https://) is downloaded here and staged as
-// inline data. When a Sha1 digest is supplied, the bytes staged from Src
-// (local file or downloaded body) must hash to that digest or staging
-// fails.
+// inline data. When a Sha1 digest is supplied, the final bytes staged from
+// Src, after optional ForceLF normalisation, must hash to that digest or
+// staging fails.
 func fileEntryToCopy(f config.FileEntry) (wsl.CopyEntry, error) {
 	switch {
 	case f.Src != "":
@@ -380,17 +380,22 @@ func fileEntryToCopy(f config.FileEntry) (wsl.CopyEntry, error) {
 			}
 			data = d
 		}
+		if f.ForceLF && data != nil {
+			data = wsl.NormalizeCRLFToLF(data)
+		}
 		if err := verifySha1(data, f.Sha1, f.Src); err != nil {
 			return wsl.CopyEntry{}, fmt.Errorf("profile files: %q: %w", f.Dst, err)
 		}
 		if remote {
+			// Remote data has already been normalised above so the bytes
+			// verified by Sha1 are exactly the bytes written into the tar.
 			return wsl.CopyEntry{Data: data, Dst: f.Dst, Mode: f.Mode}, nil
 		}
-		return wsl.CopyEntry{Src: f.Src, Dst: f.Dst, Mode: f.Mode}, nil
+		return wsl.CopyEntry{Src: f.Src, Dst: f.Dst, Mode: f.Mode, ForceLF: f.ForceLF}, nil
 	case f.Content != nil:
-		return wsl.CopyEntry{Data: []byte(*f.Content), Dst: f.Dst, Mode: f.Mode}, nil
+		return wsl.CopyEntry{Data: []byte(*f.Content), Dst: f.Dst, Mode: f.Mode, ForceLF: f.ForceLF}, nil
 	case f.ContentBase64 != nil:
-		return wsl.CopyEntry{Data: f.DecodedContentBase64(), Dst: f.Dst, Mode: f.Mode}, nil
+		return wsl.CopyEntry{Data: f.DecodedContentBase64(), Dst: f.Dst, Mode: f.Mode, ForceLF: f.ForceLF}, nil
 	default:
 		return wsl.CopyEntry{}, fmt.Errorf("profile files: %q: no source set (call Profile.Validate first)", f.Dst)
 	}

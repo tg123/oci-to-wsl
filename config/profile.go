@@ -43,11 +43,12 @@ type FileEntry struct {
 
 	// Sha1 is an optional hex SHA-1 digest (40 hex characters) that the
 	// bytes staged from Src must match. It applies to any Src, whether a
-	// local filesystem path or a network URL (http:// or https://). When
-	// set, staging fails if the file's content does not hash to this
-	// value. Comparison is case-insensitive, so the digest may be given in
-	// upper or lower case. Only valid together with Src (not with inline
-	// Content or ContentBase64).
+	// local filesystem path or a network URL (http:// or https://). If
+	// ForceLF is enabled, the digest applies to the normalised staged
+	// bytes. Staging fails if the content does not hash to this value.
+	// Comparison is case-insensitive, so the digest may be given in upper
+	// or lower case. Only valid together with Src (not with inline Content
+	// or ContentBase64).
 	Sha1 string `yaml:"sha1,omitempty"`
 
 	// Content is an inline UTF-8 file body. When set, no host file is
@@ -100,6 +101,18 @@ type FileEntry struct {
 	// Use a pointer so an absent value is distinguishable from explicit
 	// `false` and can therefore default to true.
 	Replace *bool `yaml:"replace,omitempty"`
+
+	// ForceLF, when true, normalises Windows CRLF ("\r\n") line endings to
+	// LF ("\n") in the staged file body before it is written into the
+	// rootfs tar. This is useful for shell scripts and config files staged
+	// from a Windows host (or via inline `content`), where stray carriage
+	// returns break a "#!/bin/sh\r" shebang or are otherwise unwanted in
+	// the Linux guest. It applies to a host file source, to every regular
+	// file under a directory source, and to inline `content` /
+	// `content_base64` bodies; symlinks are never rewritten. Files with a
+	// NUL byte in the first 8000 bytes are treated as binary and skipped.
+	// Defaults to false so all payloads are left byte-for-byte intact.
+	ForceLF bool `yaml:"force_lf,omitempty"`
 }
 
 // ReplaceEnabled reports whether this entry's Dst should replace (i.e. be
